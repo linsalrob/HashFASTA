@@ -328,6 +328,62 @@ def _strip_for_default(name):
     return name
 
 
+def random_fasta(seed, records=300):
+    """Seeded FASTA exercising wrapping, case, CRLF, blank lines and odd headers."""
+    import random
+    rng = random.Random(seed)
+    alphabet = b"ACGTNacgtnRYKMSWBDHVrykmswbdhvU-.*EFILPQXZ"
+    head_chars = [bytes([c]) for c in range(0x20, 0x7F)] + [b"\t", b"\xc3\xa9"]
+    out = bytearray()
+    for i in range(records):
+        eol = b"\r\n" if rng.random() < 0.2 else b"\n"
+        header = b"".join(rng.choice(head_chars) for _ in range(rng.randint(0, 40)))
+        out += b">" + header + eol
+        if rng.random() < 0.05 and i:
+            # Repeat a previous sequence verbatim under a new header.
+            seq = last
+        else:
+            seq = bytes(rng.choice(alphabet) for _ in range(rng.randint(1, 700)))
+        last = seq
+        width = rng.choice([1, 7, 60, 79, 80, 81, 1000])
+        for j in range(0, len(seq), width):
+            out += seq[j:j + width] + (b" \t" if rng.random() < 0.05 else b"") + eol
+            if rng.random() < 0.03:
+                out += eol
+    return bytes(out)
+
+
+def cross_check(targets):
+    """All implementations must emit identical decompressed bytes."""
+    tmp = tempfile.mkdtemp(prefix="hashfasta-cross-")
+    ok = True
+    try:
+        for seed in (1, 2, 3):
+            data = random_fasta(seed)
+            src = os.path.join(tmp, "random-%d.fa.gz" % seed)
+            with open(src, "wb") as fh:
+                fh.write(gzip.compress(data))
+            outputs = {}
+            for name, cmd in targets:
+                out = os.path.join(tmp, "%s-%d.hash.fasta.gz" % (name, seed))
+                r = subprocess.run(cmd + [src, "-o", out], stdout=subprocess.PIPE,
+                                   stderr=subprocess.PIPE)
+                outputs[name] = (gzip.open(out).read() if r.returncode == 0
+                                 else "exit %d: %s" % (r.returncode, r.stderr.decode(errors="replace")))
+            distinct = set(v if isinstance(v, bytes) else v.encode() for v in outputs.values())
+            agree = len(distinct) == 1 and isinstance(next(iter(outputs.values())), bytes)
+            print("cross-check seed %d (%d bytes in): %s" % (
+                seed, len(data), "identical across " + ", ".join(outputs) if agree else "MISMATCH"))
+            if not agree:
+                ok = False
+                for name, v in outputs.items():
+                    desc = (hashlib.sha256(v).hexdigest()[:16] if isinstance(v, bytes) else v)
+                    print("  %-8s %s" % (name, desc))
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return ok
+
+
 def main(argv):
     if argv[:1] == ["--cmd"]:
         targets = [("custom", argv[1:])]
@@ -346,6 +402,10 @@ def main(argv):
             results[name] = False
             continue
         results[name] = Runner(name, cmd).run_all()
+    available = [(n, c) for n, c in targets if results[n]]
+    if len(available) > 1:
+        print()
+        results["cross"] = cross_check(available)
     print()
     for name, ok in results.items():
         print("%-8s %s" % (name, "PASS" if ok else "FAIL"))

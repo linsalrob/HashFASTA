@@ -57,11 +57,12 @@ sub write_record {
     my ($out, $header, $seq, $header_line) = @_;
     fail("record at line $header_line has an empty sequence") unless length $seq;
     (my $escaped = $header) =~ s/([\\\[\]])/\\$1/g;
-    my $text = '>sha256_' . sha256_hex($seq) . " [$escaped]\n";
-    for (my $i = 0; $i < length $seq; $i += $LINE_WIDTH) {
-        $text .= substr($seq, $i, $LINE_WIDTH) . "\n";
+    put($out, '>sha256_' . sha256_hex($seq) . " [$escaped]\n");
+    # Write in blocks of wrapped lines rather than one copy of the record.
+    my $block = $LINE_WIDTH * 1024;
+    for (my $i = 0; $i < length $seq; $i += $block) {
+        put($out, join '', map { "$_\n" } unpack('(a' . $LINE_WIDTH . ')*', substr($seq, $i, $block)));
     }
-    put($out, $text);
 }
 
 # Stream FASTA records from $in to $out, holding one record in memory.

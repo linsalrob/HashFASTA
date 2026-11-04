@@ -65,9 +65,8 @@ def write_record(out, header, seq):
     out.write(b" [")
     out.write(escape_header(header))
     out.write(b"]\n")
-    for i in range(0, len(seq), LINE_WIDTH):
-        out.write(seq[i:i + LINE_WIDTH])
-        out.write(b"\n")
+    out.write(b"".join(seq[i:i + LINE_WIDTH] + b"\n"
+                       for i in range(0, len(seq), LINE_WIDTH)))
 
 
 def convert(inp, out):
@@ -140,7 +139,8 @@ def run(input_path, output_path):
     try:
         inp = open_input(raw)
         if output_path == "-":
-            gz = gzip.GzipFile(fileobj=sys.stdout.buffer, mode="wb", mtime=0)
+            gz = gzip.GzipFile(fileobj=sys.stdout.buffer, mode="wb", mtime=0,
+                               compresslevel=6)
             convert(inp, gz)
             gz.close()
             sys.stdout.buffer.flush()
@@ -149,7 +149,7 @@ def run(input_path, output_path):
             tmp_path = "%s.tmp.%d" % (output_path, os.getpid())
             with open(tmp_path, "wb") as fh:
                 gz = gzip.GzipFile(fileobj=fh, mode="wb", mtime=0,
-                                   filename="")
+                                   filename="", compresslevel=6)
                 convert(inp, gz)
                 gz.close()
             os.replace(tmp_path, output_path)
