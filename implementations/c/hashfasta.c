@@ -283,7 +283,7 @@ static void write_record(gzFile out, const buffer *header, const buffer *seq,
     }
 }
 
-enum state { LINE_START, IN_HEADER, IN_SEQ };
+enum state { LINE_START, IN_HEADER, IN_COMMENT, IN_SEQ };
 
 /* Stream FASTA records from in to out, holding one record in memory. */
 static void convert(reader *in, gzFile out) {
@@ -310,12 +310,21 @@ static void convert(reader *in, gzFile out) {
                     st = IN_HEADER;
                     continue;
                 }
+                /* A line starting with ';' is a comment (spec section 3). */
+                if (c == ';') {
+                    st = IN_COMMENT;
+                    continue;
+                }
                 st = IN_SEQ;
             }
             if (st == IN_HEADER) {
                 /* Every CR is removed from the definition line (spec section 2). */
                 if (c == '\n') st = LINE_START;
                 else if (c != '\r') buf_push(&header, c);
+                continue;
+            }
+            if (st == IN_COMMENT) {
+                if (c == '\n') st = LINE_START;
                 continue;
             }
             /* IN_SEQ */
@@ -325,6 +334,9 @@ static void convert(reader *in, gzFile out) {
                 continue;
             } else if (!have_header) {
                 die("line %zu: sequence data before the first '>' header", lineno);
+            } else if (c == ';') {
+                die("line %zu: invalid sequence byte ';' (allowed only at the start of a comment "
+                    "line) in record starting at line %zu", lineno, header_line);
             } else if (c < 0x21 || c > 0x7e) {
                 die("line %zu: invalid sequence byte 0x%02x (non-ASCII or non-printable) "
                     "in record starting at line %zu", lineno, c, header_line);
@@ -338,6 +350,31 @@ static void convert(reader *in, gzFile out) {
     free(chunk);
     free(header.data);
     free(seq.data);
+}
+
+/* Exclusively create a temporary sibling of output, recorded in tmp_path.
+ * O_EXCL refuses any existing name, including a symlink or hard link to the
+ * input, so a planted temporary path can never redirect the write. */
+static int create_temp(const char *output) {
+    size_t len = strlen(output) + 48;
+    int n, fd;
+    char *path = malloc(len);
+    if (!path) die("out of memory");
+    for (n = 0; n < 1000; n++) {
+        snprintf(path, len, "%s.tmp.%ld.%d", output, (long)getpid(), n);
+        fd = open(path, O_WRONLY | O_CREAT | O_EXCL, 0666);
+        if (fd >= 0) {
+            tmp_path = path;
+            return fd;
+        }
+        if (errno != EEXIST) {
+            free(path);
+            die("cannot create %s: %s", output, strerror(errno));
+        }
+    }
+    free(path);
+    die("cannot create a temporary file beside %s", output);
+    return -1;
 }
 
 /* Shorten *len by the first of suffixes that name[0..*len) ends with. */
@@ -412,16 +449,9 @@ int main(int argc, char **argv) {
         if (!out) die("cannot open stdout");
     } else {
         /* Write a temporary sibling, renamed into place only on success. */
-        size_t len = strlen(output) + 32;
-        tmp_path = malloc(len);
-        if (!tmp_path) die("out of memory");
-        snprintf(tmp_path, len, "%s.tmp.%ld", output, (long)getpid());
-        out = gzopen(tmp_path, "wb");
-        if (!out) {
-            free(tmp_path);
-            tmp_path = NULL;
-            die("cannot create %s: %s", output, strerror(errno));
-        }
+        int tmp_fd = create_temp(output);
+        out = gzdopen(tmp_fd, "wb");
+        if (!out) die("cannot create %s: %s", output, strerror(errno));
     }
     gzbuffer(out, IO_BUFFER);
 

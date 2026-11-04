@@ -29,8 +29,10 @@ UNSUPPORTED_MAGIC = ((b"\x28\xb5\x2f\xfd", "zstd"), (b"PK\x03\x04", "ZIP"))
 # Whitespace removed before hashing: space, HT, LF, VT, FF, CR.
 WHITESPACE = b" \t\n\x0b\x0c\r"
 UPPER = bytes.maketrans(b"abcdefghijklmnopqrstuvwxyz", b"ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-# After whitespace removal, only printable non-space ASCII (0x21-0x7e) is valid.
-VALID = bytes(range(0x21, 0x7F))
+# After whitespace removal, only printable non-space ASCII (0x21-0x7e) other
+# than ';' is valid. A line starting with ';' is a comment (spec section 3).
+VALID = bytes(b for b in range(0x21, 0x7F) if b != 0x3B)
+COMMENT = b";"
 
 _DECODE_ERRORS = (OSError, EOFError, zlib.error, lzma.LZMAError)
 
@@ -70,12 +72,18 @@ def unescape_header(escaped):
     return _UNESCAPE.sub(rb"\1", escaped)
 
 
+def _invalid_byte(b):
+    if b == COMMENT[0]:
+        return "invalid sequence byte ';' (allowed only at the start of a comment line)"
+    return "invalid sequence byte 0x%02x (non-ASCII or non-printable)" % b
+
+
 def normalize_sequence(data):
     """Remove ASCII whitespace and uppercase a-z; raise on invalid bytes."""
     seq = data.translate(UPPER, WHITESPACE)
     bad = seq.translate(None, VALID)
     if bad:
-        raise HashFastaError("invalid sequence byte 0x%02x (non-ASCII or non-printable)" % bad[0])
+        raise HashFastaError(_invalid_byte(bad[0]))
     return seq
 
 
@@ -164,6 +172,8 @@ def _parse(inp):
                 header_line = lineno
                 seq = bytearray()
                 continue
+            if line.startswith(COMMENT):
+                continue
             chunk = line.translate(UPPER, WHITESPACE)
             if not chunk:
                 continue
@@ -172,10 +182,8 @@ def _parse(inp):
                     "line %d: sequence data before the first '>' header" % lineno)
             bad = chunk.translate(None, VALID)
             if bad:
-                raise HashFastaError(
-                    "line %d: invalid sequence byte 0x%02x (non-ASCII or "
-                    "non-printable) in record starting at line %d"
-                    % (lineno, bad[0], header_line))
+                raise HashFastaError("line %d: %s in record starting at line %d"
+                                     % (lineno, _invalid_byte(bad[0]), header_line))
             seq += chunk
     except _DECODE_ERRORS as e:
         raise HashFastaError("cannot read input: %s" % e)
@@ -290,6 +298,22 @@ def _same_file(a, b):
         return False
 
 
+def _create_temp(output_path):
+    """Exclusively create a temporary sibling of output_path; return (path, fd).
+
+    O_EXCL refuses any existing name, including a symlink or hard link to the
+    input, so a planted temporary path can never redirect the write.
+    """
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+    for n in range(1000):
+        path = "%s.tmp.%d.%d" % (output_path, os.getpid(), n)
+        try:
+            return path, os.open(path, flags, 0o666)
+        except FileExistsError:
+            continue
+    raise HashFastaError("cannot create a temporary file beside %s" % output_path)
+
+
 def convert(input_path, output_path=None):
     """Convert ``input_path`` to gzip HashFASTA; return the output path.
 
@@ -313,8 +337,8 @@ def convert(input_path, output_path=None):
             gz.close()
             sys.stdout.buffer.flush()
         else:
-            tmp_path = "%s.tmp.%d" % (output_path, os.getpid())
-            with open(tmp_path, "wb") as fh:
+            tmp_path, fd = _create_temp(output_path)
+            with os.fdopen(fd, "wb") as fh:
                 gz = _gzip_writer(fh)
                 convert_stream(inp, gz)
                 gz.close()

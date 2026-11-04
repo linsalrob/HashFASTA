@@ -278,6 +278,26 @@ class Runner(object):
             self.check("error output==input%s [input unchanged]" % label,
                        sha256_file(src) == before)
 
+        # Planted temporary names (a symlink and a hard link to the input) must not
+        # be written through. `exec` keeps the shell's PID for the converter.
+        out = self.path("planted.hash.fasta.gz")
+        plant = ('ln -s "$1" "$2.tmp.$$"; ln -s "$1" "$2.tmp.$$.0"; ln "$1" "$2.tmp.$$.1"; '
+                 'shift 2; exec "$@"')
+        r = subprocess.run(["sh", "-c", plant, "sh", src, out] + self.cmd + [src, "-o", out],
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        self.check("planted temp links [exit 0]", r.returncode == 0, r.stderr.decode(errors="replace"))
+        self.check("planted temp links [input unchanged]", sha256_file(src) == before)
+        if os.path.exists(out):
+            with open(out, "rb") as fh:
+                self.check_gzip_output("planted temp links", fh.read(),
+                                       b">sha256_" + hashlib.sha256(b"ACGT").hexdigest().encode()
+                                       + b" [a]\nACGT\n")
+        else:
+            self.check("planted temp links", False, "no output written")
+        for f in os.listdir(self.tmp):
+            if f.startswith("planted."):
+                os.unlink(self.path(f))
+
         r = self.run([self.path("missing.fasta"), "-o", self.path("missing.out.gz")])
         self.check("error missing input [non-zero exit]", r.returncode != 0)
         self.check("error missing input [no output]", not os.path.exists(self.path("missing.out.gz")))
@@ -326,6 +346,8 @@ def random_fasta(seed, records=300):
             out += seq[j:j + width] + (b" \t\r" if rng.random() < 0.05 else b"") + eol
             if rng.random() < 0.03:
                 out += eol
+            if rng.random() < 0.03:
+                out += b";" + header + eol  # comment line (spec section 3)
     return bytes(out)
 
 

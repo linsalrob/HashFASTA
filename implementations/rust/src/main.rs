@@ -139,6 +139,10 @@ fn convert<R: BufRead + ?Sized, W: Write>(inp: &mut R, out: &mut W) -> Result<us
             seq.clear();
             continue;
         }
+        // A line starting with ';' is a comment (spec section 3).
+        if line[0] == b';' {
+            continue;
+        }
         for &b in &line {
             if is_space(b) {
                 continue;
@@ -146,6 +150,12 @@ fn convert<R: BufRead + ?Sized, W: Write>(inp: &mut R, out: &mut W) -> Result<us
             if header.is_none() {
                 return Err(format!(
                     "line {lineno}: sequence data before the first '>' header"
+                ));
+            }
+            if b == b';' {
+                return Err(format!(
+                    "line {lineno}: invalid sequence byte ';' (allowed only at the start \
+                     of a comment line) in record starting at line {header_line}"
                 ));
             }
             if !(0x21..0x7f).contains(&b) {
@@ -171,6 +181,25 @@ fn same_file(a: &str, b: &str) -> bool {
         (Ok(ma), Ok(mb)) => ma.dev() == mb.dev() && ma.ino() == mb.ino(),
         _ => false,
     }
+}
+
+/// Exclusively create a temporary sibling of `output`. `create_new` (O_EXCL)
+/// refuses any existing name, including a symlink or hard link to the input,
+/// so a planted temporary path can never redirect the write.
+fn create_temp(output: &str) -> Result<(String, File)> {
+    for n in 0..1000 {
+        let path = format!("{output}.tmp.{}.{n}", std::process::id());
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&path)
+        {
+            Ok(fh) => return Ok((path, fh)),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(format!("cannot create {output}: {e}")),
+        }
+    }
+    Err(format!("cannot create a temporary file beside {output}"))
 }
 
 fn gz_writer<W: Write>(w: W) -> GzEncoder<W> {
@@ -205,9 +234,8 @@ fn run(input: &str, output: Option<&str>) -> Result<()> {
     }
 
     // Write a temporary sibling, renamed into place only on success.
-    let tmp = format!("{output}.tmp.{}", std::process::id());
+    let (tmp, fh) = create_temp(&output)?;
     let result = (|| -> Result<()> {
-        let fh = File::create(&tmp).map_err(|e| format!("cannot create {output}: {e}"))?;
         let mut gz = gz_writer(BufWriter::new(fh));
         convert(&mut inp, &mut gz)?;
         let w = gz.finish().map_err(|e| format!("I/O error: {e}"))?;

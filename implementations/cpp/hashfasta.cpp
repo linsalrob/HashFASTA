@@ -278,7 +278,7 @@ std::string hex_byte(unsigned char c) {
 
 // Stream FASTA records from in to out, holding one record in memory.
 void convert(Reader &in, GzFile &out) {
-    enum class State { LineStart, InHeader, InSeq } st = State::LineStart;
+    enum class State { LineStart, InHeader, InComment, InSeq } st = State::LineStart;
     std::vector<unsigned char> chunk(kIoBuffer);
     std::optional<std::string> header;
     std::string seq;
@@ -297,6 +297,11 @@ void convert(Reader &in, GzFile &out) {
                     st = State::InHeader;
                     continue;
                 }
+                // A line starting with ';' is a comment (spec section 3).
+                if (c == ';') {
+                    st = State::InComment;
+                    continue;
+                }
                 st = State::InSeq;
             }
             if (st == State::InHeader) {
@@ -305,12 +310,20 @@ void convert(Reader &in, GzFile &out) {
                 else if (c != '\r') header->push_back(static_cast<char>(c));
                 continue;
             }
+            if (st == State::InComment) {
+                if (c == '\n') st = State::LineStart;
+                continue;
+            }
             if (c == '\n') {
                 st = State::LineStart;
             } else if (is_space(c)) {
                 continue;
             } else if (!header) {
                 throw Error("line " + std::to_string(lineno) + ": sequence data before the first '>' header");
+            } else if (c == ';') {
+                throw Error("line " + std::to_string(lineno) +
+                            ": invalid sequence byte ';' (allowed only at the start of a comment line)"
+                            " in record starting at line " + std::to_string(header_line));
             } else if (c < 0x21 || c > 0x7e) {
                 throw Error("line " + std::to_string(lineno) + ": invalid sequence byte " + hex_byte(c) +
                             " (non-ASCII or non-printable) in record starting at line " +
@@ -322,6 +335,19 @@ void convert(Reader &in, GzFile &out) {
     }
     if (!header) throw Error("input contains no FASTA records");
     write_record(out, *header, seq, header_line);
+}
+
+// Exclusively create a temporary sibling of output, returning its fd and path.
+// O_EXCL refuses any existing name, including a symlink or hard link to the
+// input, so a planted temporary path can never redirect the write.
+int create_temp(const std::string &output, std::string &path) {
+    for (int n = 0; n < 1000; n++) {
+        path = output + ".tmp." + std::to_string(getpid()) + "." + std::to_string(n);
+        const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0666);
+        if (fd >= 0) return fd;
+        if (errno != EEXIST) throw Error("cannot create " + output + ": " + std::strerror(errno));
+    }
+    throw Error("cannot create a temporary file beside " + output);
 }
 
 bool same_file(const std::string &a, const std::string &b) {
@@ -349,10 +375,14 @@ void run(const std::string &input, std::optional<std::string> output_opt) {
     }
 
     // Write a temporary sibling, renamed into place only on success.
-    const std::string tmp = output + ".tmp." + std::to_string(getpid());
+    std::string tmp;
+    const int tmp_fd = create_temp(output, tmp);
     try {
-        GzFile out(gzopen(tmp.c_str(), "wb"));
-        if (!out.get()) throw Error("cannot create " + output + ": " + std::strerror(errno));
+        GzFile out(gzdopen(tmp_fd, "wb"));
+        if (!out.get()) {
+            ::close(tmp_fd);
+            throw Error("cannot create " + output + ": " + std::strerror(errno));
+        }
         gzbuffer(out.get(), kIoBuffer);
         convert(in, out);
         out.close();

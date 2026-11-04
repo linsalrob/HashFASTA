@@ -63,6 +63,10 @@ VALID = {
         record(b"ACGTACGTAC", b"a original") + record(b"ACGTACGTAC", b"b lower")
         + record(b"ACGTACGTAC", b"c wrapped") + record(b"ACGTACGTAC", b"d spaced")
         + record(b"ACGTACGTAG", b"e different")),
+    "edge-comment-lines": (
+        b";file comment before the first header\n;\n>a\n;comment after header\nAC\n"
+        b";comment mid-sequence; with [brackets]\r\nGT\n;\n>b\nTT\n;trailing comment no newline",
+        record(b"ACGT", b"a") + record(b"TT", b"b")),
     "edge-blank-lines-no-final-newline": (
         b"\n  \n\t\n>a\n\nAC\n\n\n>b\nGT",
         record(b"AC", b"a") + record(b"GT", b"b")),
@@ -78,6 +82,10 @@ INVALID_CASES = {
     "control-byte-sequence": b">a\nAC\x01GT\n",
     "nul-byte-sequence": b">a\nAC\x00GT\n",
     "del-byte-sequence": b">a\nAC\x7fGT\n",
+    "semicolon-in-sequence": b">a\nAC;GT\n",
+    "indented-semicolon-line": b">a\nACGT\n  ;not a comment\n",
+    "comment-only-sequence": b">a\n;just a comment\n>b\nAC\n",
+    "comments-only": b";one\n;two\n",
     "empty-input": b"",
     "blank-lines-only": b"\n\r\n  \n",
 }

@@ -50,6 +50,7 @@ hashfasta INPUT [-o OUTPUT]
 - Input may be plain FASTA or FASTA compressed with gzip/BGZF, bzip2 or xz. The format is detected from the content, not the name, and concatenated members/streams are accepted. zstd and ZIP input are rejected with an error; decompress them first.
 - The default output name drops one compression suffix (`.gz`, `.bgz`, `.bz2`, `.xz`), then one FASTA suffix (`.fa`, `.fas`, `.fasta`, `.fna`, `.ffn`, `.faa`, `.frn`, `.fsa`), and adds `.hash.fasta.gz`.
 - Windows line endings are removed: output never contains a carriage return.
+- Lines starting with `;` are comments and are dropped. A `;` anywhere else in a sequence is an error.
 - Output is **always gzip**. Read it with `gzip -cd x.hash.fasta.gz` or `zcat`.
 - The input file is never modified. Output is written to a temporary sibling (`OUTPUT.tmp.PID`) and renamed into place only on success, so a failed run leaves no partial file.
 - Errors go to stderr with a non-zero exit status: `1` for invalid input or I/O failures, `2` for usage errors. Invalid input includes an empty sequence, sequence data before the first `>`, non-ASCII or non-printable sequence bytes, an empty file, or a corrupt or truncated compressed stream.
@@ -90,7 +91,7 @@ python3 tests/run_conformance.py --cmd /path/to/tool   # test any other converte
 
 The shared runner `tests/run_conformance.py` runs the same checks against each tool:
 
-- every `tests/data/*.input.fasta.gz` / `*.expected.hash.fasta.gz` pair (real crAssphage data, duplicate cases, and the `edge-*` normalization, escaping, wrapping and CRLF cases), comparing the decompressed bytes exactly;
+- every `tests/data/*.input.fasta.gz` / `*.expected.hash.fasta.gz` pair (real crAssphage data, duplicate cases, and the `edge-*` normalization, escaping, wrapping, CRLF and comment-line cases), comparing the decompressed bytes exactly;
 - each input as gzip, plain, bzip2 and xz, multi-member, misnamed and on stdin, plus default output naming for every suffix combination;
 - every output checked with `gzip -t` and a full decompression, and for the absence of carriage returns;
 - every `tests/data/invalid/` input, zstd/ZIP input and truncated gzip, bzip2 and xz must fail without leaving an output file;

@@ -17,6 +17,7 @@ use Digest::SHA qw(sha256_hex);
 use IO::Compress::Gzip qw($GzipError);
 use IO::Uncompress::Bunzip2 qw($Bunzip2Error);
 use IO::Uncompress::Gunzip qw($GunzipError);
+use Fcntl qw(O_CREAT O_EXCL O_WRONLY);
 use POSIX ();
 
 my $PROG          = 'hashfasta';
@@ -89,9 +90,14 @@ sub convert {
             $seq = '';
             next;
         }
+        next if substr($line, 0, 1) eq ';';    # comment line (spec section 3)
         $line =~ tr/ \t\n\x0b\x0c\r//d;
         next unless length $line;
         fail("line $lineno: sequence data before the first '>' header") unless defined $header;
+        if (index($line, ';') >= 0) {
+            fail("line $lineno: invalid sequence byte ';' (allowed only at the start of a "
+                    . "comment line) in record starting at line $header_line");
+        }
         if ($line =~ /([^\x21-\x7e])/) {
             fail(sprintf("line %d: invalid sequence byte 0x%02x (non-ASCII or non-printable) "
                     . "in record starting at line %d", $lineno, ord $1, $header_line));
@@ -182,6 +188,22 @@ sub open_input {
     return module_reader($z, \$GunzipError);
 }
 
+# Exclusively create a temporary sibling of $output, recorded in $tmp_path.
+# O_EXCL refuses any existing name, including a symlink or hard link to the
+# input, so a planted temporary path can never redirect the write.
+sub create_temp {
+    my ($output) = @_;
+    for my $n (0 .. 999) {
+        my $path = "$output.tmp.$$.$n";
+        if (sysopen my $fh, $path, O_WRONLY | O_CREAT | O_EXCL, 0666) {
+            $tmp_path = $path;
+            return $fh;
+        }
+        fail("cannot create $output: $!") unless $!{EEXIST};
+    }
+    fail("cannot create a temporary file beside $output");
+}
+
 sub open_output {
     my ($fh) = @_;
     binmode $fh;
@@ -224,12 +246,7 @@ sub main {
     }
 
     # Write a temporary sibling, renamed into place only on success.
-    $tmp_path = "$output.tmp.$$";
-    open my $fh, '>', $tmp_path or do {
-        my $err = $!;
-        undef $tmp_path;
-        fail("cannot create $output: $err");
-    };
+    my $fh = create_temp($output);
     my $out = open_output($fh);
     convert($in, $out);
     $out->close or fail("closing output failed: $GzipError");

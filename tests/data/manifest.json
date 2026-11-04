@@ -25,6 +25,7 @@
     "generator": "tests/make_edge_fixtures.py",
     "fixtures": [
       "edge-blank-lines-no-final-newline",
+      "edge-comment-lines",
       "edge-crlf-line-endings",
       "edge-header-escaping",
       "edge-header-special",
@@ -36,14 +37,18 @@
   },
   "invalid_inputs": [
     "blank-lines-only",
+    "comment-only-sequence",
+    "comments-only",
     "control-byte-sequence",
     "data-before-header",
     "del-byte-sequence",
     "empty-input",
     "empty-sequence-last",
     "empty-sequence-middle",
+    "indented-semicolon-line",
     "non-ascii-sequence",
     "nul-byte-sequence",
+    "semicolon-in-sequence",
     "whitespace-only-sequence"
   ],
   "input_compression": [
