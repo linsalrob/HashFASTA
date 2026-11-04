@@ -26,7 +26,7 @@ For each input FASTA record, replace the original definition line with:
 >sha256_<64 lowercase hexadecimal digits> [<escaped original definition line>]
 ```
 
-The digest key is the first whitespace-delimited token, so common FASTA readers see a unique sequence-derived ID. The complete original definition line (the text after the original `>`, including its original ID and description) is retained in square brackets for provenance.
+The digest key is the first whitespace-delimited token. Records with different normalized sequences have different sequence-derived IDs; records with identical normalized sequences share the same key. The complete original definition line (the text after the original `>`, including its original ID and description) is retained in square brackets for provenance.
 
 Within the bracketed original definition line, escape backslash as `\\`, `[` as `\[`, and `]` as `\]`. A conforming reader reverses these escapes to recover the original header. No other header text is changed.
 
@@ -63,7 +63,7 @@ The reference interface is:
 hashfasta input.fasta[.gz] [-o output.hash.fasta.gz]
 ```
 
-- If `-o` is omitted for a named input, write a sibling file whose name ends in `.hash.fasta.gz`; remove a trailing `.gz` and a recognized FASTA suffix (`.fa`, `.fas`, `.fasta`, `.fna`, or `.ffn`) before adding the suffix.
+- If `-o` is omitted for a named input, write a sibling file whose name ends in `.hash.fasta.gz`; remove a trailing `.gz` and a recognized FASTA suffix (`.fa`, `.fas`, `.fasta`, `.fna`, `.ffn`, `.faa`, `.frn`, or `.fsa`) before adding the suffix.
 - If input is `-`, output defaults to stdout. An explicit `-o -` also selects stdout.
 - Output is always gzip-compressed in this draft. To read the resulting FASTA text, use any gzip reader (for example, `gzip -cd sample.hash.fasta.gz`).
 - Errors go to stderr and produce a non-zero exit status.
