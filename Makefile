@@ -14,6 +14,7 @@ cpp:
 	$(MAKE) -C implementations/cpp
 
 test: build
+	$(PYTHON) -m unittest discover -s implementations/python/tests
 	$(PYTHON) tests/run_conformance.py
 
 clean:

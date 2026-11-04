@@ -9,12 +9,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Install zlib headers
-        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev
+      - name: Install compression libraries and the Perl xz module
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zlib1g-dev libbz2-dev liblzma-dev libio-compress-lzma-perl
       - name: Rust formatting and lints
         working-directory: implementations/rust
         run: |
           cargo fmt --check
           cargo clippy --release -- -D warnings
+      - name: Fixtures are reproducible from the spec rules
+        run: python3 tests/make_edge_fixtures.py --check
       - name: Build and run conformance tests for all implementations
         run: make test
