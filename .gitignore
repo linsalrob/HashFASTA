@@ -30,3 +30,6 @@ implementations/cpp/hashfasta
 __pycache__/
 *.pyc
 .agent/
+*.egg-info/
+build/
+dist/

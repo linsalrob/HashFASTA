@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hashfasta"
+dynamic = ["version"]
+description = "Convert FASTA to HashFASTA: records keyed by the SHA-256 of their normalized sequence, gzip output"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "Rob Edwards", email = "robert.edwards@flinders.edu.au"}]
+keywords = ["FASTA", "bioinformatics", "SHA-256", "sequence", "provenance"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/linsalrob/HashFASTA"
+Specification = "https://github.com/linsalrob/HashFASTA/blob/main/spec/HASHFASTA-v0.1.md"
+Issues = "https://github.com/linsalrob/HashFASTA/issues"
+
+[project.scripts]
+hashfasta = "hashfasta.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "hashfasta.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+hashfasta = ["py.typed"]
