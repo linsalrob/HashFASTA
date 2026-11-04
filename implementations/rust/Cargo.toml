@@ -1,0 +1,14 @@
+[package]
+name = "hashfasta"
+version = "0.1.0"
+edition = "2021"
+description = "HashFASTA v0.1 converter: sequence-derived SHA-256 FASTA IDs, gzip output"
+license-file = "../../LICENSE"
+publish = false
+
+[dependencies]
+flate2 = "1"
+sha2 = "0.10"
+
+[profile.release]
+lto = true
