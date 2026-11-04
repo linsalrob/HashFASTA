@@ -1,0 +1,24 @@
+{
+  "format": "HashFASTA draft v0.1",
+  "source": {
+    "accession": "JQ995537.1",
+    "record": "Uncultured phage crAssphage, complete genome",
+    "genbank_archive": "https://github.com/linsalrob/crAssphage/blob/master/JQ995537.gbk",
+    "publication_doi": "10.1038/ncomms5498"
+  },
+  "nucleotide": {
+    "records": 1,
+    "length_bp": 97065,
+    "normalized_sequence_sha256": "cb4eff1b59ed1a1cb81cb679f5c76ac2a716781a7ce01c5e9d0c0a53f1ac876c"
+  },
+  "proteins": {
+    "records": 80,
+    "total_residues": 29522,
+    "concatenated_normalized_sequences_sha256": "5a60048271815f3a3a844fd97dd6a33eb9ae8342b7206e550c35bca03ae33fbb"
+  },
+  "synthetic_cases": {
+    "duplicate_id_distinct_sequences": 2,
+    "identical_sequences_distinct_headers": 2
+  },
+  "compression": "gzip; deterministic fixture mtime=0"
+}
