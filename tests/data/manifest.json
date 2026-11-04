@@ -20,5 +20,36 @@
     "duplicate_id_distinct_sequences": 2,
     "identical_sequences_distinct_headers": 2
   },
-  "compression": "gzip; deterministic fixture mtime=0"
+  "compression": "gzip; deterministic fixture mtime=0",
+  "edge_cases": {
+    "generator": "tests/make_edge_fixtures.py",
+    "fixtures": [
+      "edge-blank-lines-no-final-newline",
+      "edge-crlf-line-endings",
+      "edge-header-escaping",
+      "edge-header-special",
+      "edge-lowercase-whitespace",
+      "edge-rewrapped-equivalent",
+      "edge-symbols-retained",
+      "edge-wrap-boundaries"
+    ]
+  },
+  "invalid_inputs": [
+    "blank-lines-only",
+    "control-byte-sequence",
+    "data-before-header",
+    "del-byte-sequence",
+    "empty-input",
+    "empty-sequence-last",
+    "empty-sequence-middle",
+    "non-ascii-sequence",
+    "nul-byte-sequence",
+    "whitespace-only-sequence"
+  ],
+  "input_compression": [
+    "none",
+    "gzip",
+    "bzip2",
+    "xz"
+  ]
 }
