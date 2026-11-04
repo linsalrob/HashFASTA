@@ -1,0 +1,20 @@
+name: conformance
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install zlib headers
+        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev
+      - name: Rust formatting and lints
+        working-directory: implementations/rust
+        run: |
+          cargo fmt --check
+          cargo clippy --release -- -D warnings
+      - name: Build and run conformance tests for all implementations
+        run: make test
