@@ -3,19 +3,25 @@
 #
 # Usage: hashfasta.pl INPUT [-o OUTPUT]   ('-' means stdin / stdout)
 #
-# Core modules only: IO::Uncompress::Gunzip (detects gzip by magic bytes,
-# passes plain input through, reads concatenated members), IO::Compress::Gzip
-# and Digest::SHA.
+# Input format is detected from its magic bytes. Core modules handle gzip
+# (IO::Uncompress::Gunzip), bzip2 (IO::Uncompress::Bunzip2) and plain text;
+# all read concatenated members/streams. xz uses IO::Uncompress::UnXz when it
+# is installed (CPAN IO-Compress-Lzma, Debian libio-compress-lzma-perl), and
+# otherwise streams through the system `xz -dc` command.
+# Output uses IO::Compress::Gzip and Digest::SHA.
 
 use strict;
 use warnings;
 
 use Digest::SHA qw(sha256_hex);
 use IO::Compress::Gzip qw($GzipError);
+use IO::Uncompress::Bunzip2 qw($Bunzip2Error);
 use IO::Uncompress::Gunzip qw($GunzipError);
+use POSIX ();
 
 my $PROG          = 'hashfasta';
 my $LINE_WIDTH    = 80;
+my @COMPRESS_SFX  = qw(.gz .bgz .bz2 .xz);
 my @FASTA_SUFFIX  = qw(.fa .fas .fasta .fna .ffn .faa .frn .fsa);
 my $OUTPUT_SUFFIX = '.hash.fasta.gz';
 my $USAGE         = "usage: hashfasta INPUT [-o OUTPUT]   ('-' means stdin/stdout)\n";
@@ -29,16 +35,19 @@ sub fail {
     exit 1;
 }
 
-sub default_output_path {
-    my ($name) = @_;
-    $name =~ s/\.gz\z//;
-    for my $suffix (@FASTA_SUFFIX) {
+sub strip_suffix {
+    my ($name, @suffixes) = @_;
+    for my $suffix (@suffixes) {
         if (length $name >= length $suffix && substr($name, -length $suffix) eq $suffix) {
-            substr($name, -length $suffix) = '';
-            last;
+            return substr($name, 0, length($name) - length $suffix);
         }
     }
-    return $name . $OUTPUT_SUFFIX;
+    return $name;
+}
+
+sub default_output_path {
+    my ($name) = @_;
+    return strip_suffix(strip_suffix($name, @COMPRESS_SFX), @FASTA_SUFFIX) . $OUTPUT_SUFFIX;
 }
 
 sub same_file {
@@ -69,13 +78,13 @@ sub write_record {
 sub convert {
     my ($in, $out) = @_;
     my ($header, $header_line, $seq, $lineno) = (undef, 0, '', 0);
-    while (defined(my $line = $in->getline)) {
+    while (defined(my $line = $in->{getline}->())) {
         $lineno++;
         if (substr($line, 0, 1) eq '>') {
             write_record($out, $header, $seq, $header_line) if defined $header;
             $header = substr($line, 1);
+            $header =~ tr/\r//d;
             $header =~ s/\n\z//;
-            $header =~ s/\r\z//;
             $header_line = $lineno;
             $seq = '';
             next;
@@ -90,9 +99,48 @@ sub convert {
         $line =~ tr/a-z/A-Z/;
         $seq .= $line;
     }
-    fail("read failed: $GunzipError") if $in->error || $GunzipError;
+    $in->{finish}->();
     fail("input contains no FASTA records") unless defined $header;
     write_record($out, $header, $seq, $header_line);
+}
+
+# Reader over an IO::Uncompress object; $errref points at its package error.
+sub module_reader {
+    my ($z, $errref) = @_;
+    return {
+        getline => sub { $z->getline },
+        finish  => sub {
+            my $err = $z->error || $$errref;
+            fail("cannot read input: $err") if $err;
+        },
+    };
+}
+
+# xz without IO::Uncompress::UnXz: a child process feeds the already-read
+# leading bytes and the rest of the input to `xz -dc`, whose output we read.
+sub xz_pipe_reader {
+    my ($fh, $head) = @_;
+    my $pid = open(my $pipe, '-|');
+    fail("cannot fork for xz: $!") unless defined $pid;
+    if ($pid == 0) {
+        open(my $xz, '|-', 'xz', '-dc') or POSIX::_exit(127);
+        binmode $xz;
+        print {$xz} $head;
+        my $buf;
+        while (read($fh, $buf, 1 << 16)) {
+            print {$xz} $buf or last;
+        }
+        close $xz;
+        POSIX::_exit($? ? 1 : 0);
+    }
+    binmode $pipe;
+    return {
+        getline => sub { scalar <$pipe> },
+        finish  => sub {
+            close $pipe
+                or fail("xz decompression failed (needs IO::Uncompress::UnXz or the xz command)");
+        },
+    };
 }
 
 sub open_input {
@@ -104,9 +152,34 @@ sub open_input {
         open $fh, '<', $path or fail("cannot open input $path: $!");
     }
     binmode $fh;
-    my $in = IO::Uncompress::Gunzip->new($fh, MultiStream => 1, Transparent => 1, Strict => 1)
+    my $head = '';
+    my $n = read($fh, $head, 6);
+    fail("cannot read input $path: $!") unless defined $n;
+
+    fail("zstd-compressed input is not supported; decompress it first")
+        if substr($head, 0, 4) eq "\x28\xb5\x2f\xfd";
+    fail("ZIP-compressed input is not supported; decompress it first")
+        if substr($head, 0, 4) eq "PK\x03\x04";
+
+    if (substr($head, 0, 3) eq 'BZh') {
+        my $z = IO::Uncompress::Bunzip2->new($fh, Prime => $head, MultiStream => 1, Transparent => 0)
+            or fail("cannot read input $path: $Bunzip2Error");
+        return module_reader($z, \$Bunzip2Error);
+    }
+    if ($head eq "\xfd7zXZ\x00") {
+        if (eval { require IO::Uncompress::UnXz; 1 }) {
+            no strict 'refs';
+            my $z = IO::Uncompress::UnXz->new($fh, Prime => $head, MultiStream => 1, Transparent => 0)
+                or fail("cannot read input $path: ${'IO::Uncompress::UnXz::UnXzError'}");
+            return module_reader($z, \${'IO::Uncompress::UnXz::UnXzError'});
+        }
+        return xz_pipe_reader($fh, $head);
+    }
+    # gzip, or plain text passed through (Transparent) when there is no gzip magic.
+    my $z = IO::Uncompress::Gunzip->new($fh, Prime => $head, MultiStream => 1, Transparent => 1,
+                                        Strict => 1)
         or fail("cannot read input $path: $GunzipError");
-    return $in;
+    return module_reader($z, \$GunzipError);
 }
 
 sub open_output {

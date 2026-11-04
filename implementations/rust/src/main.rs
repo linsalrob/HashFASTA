@@ -2,9 +2,11 @@
 //!
 //! Usage: hashfasta INPUT [-o OUTPUT]   ('-' means stdin / stdout)
 
+use bzip2::bufread::MultiBzDecoder;
 use flate2::bufread::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use flate2::{Compression, GzBuilder};
+use liblzma::bufread::XzDecoder;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Cursor, Read, Write};
@@ -13,6 +15,7 @@ use std::process::ExitCode;
 
 const PROG: &str = "hashfasta";
 const LINE_WIDTH: usize = 80;
+const COMPRESSION_SUFFIXES: [&str; 4] = [".gz", ".bgz", ".bz2", ".xz"];
 const FASTA_SUFFIXES: [&str; 8] = [
     ".fa", ".fas", ".fasta", ".fna", ".ffn", ".faa", ".frn", ".fsa",
 ];
@@ -34,31 +37,44 @@ fn escape_header(header: &[u8], out: &mut Vec<u8>) {
     }
 }
 
-fn default_output_path(input: &str) -> String {
-    let mut name = input.strip_suffix(".gz").unwrap_or(input);
-    for suffix in FASTA_SUFFIXES {
-        if let Some(stem) = name.strip_suffix(suffix) {
-            name = stem;
-            break;
-        }
-    }
+fn default_output_path<'a>(input: &'a str) -> String {
+    let strip = |name: &'a str, suffixes: &[&str]| -> &'a str {
+        suffixes
+            .iter()
+            .find_map(|s| name.strip_suffix(s))
+            .unwrap_or(name)
+    };
+    let name = strip(strip(input, &COMPRESSION_SUFFIXES), &FASTA_SUFFIXES);
     format!("{name}{OUTPUT_SUFFIX}")
 }
 
-/// Wrap a reader, transparently decompressing gzip (detected by magic bytes).
-fn open_input(mut raw: Box<dyn Read>) -> io::Result<Box<dyn BufRead>> {
-    let mut magic = Vec::with_capacity(2);
-    (&mut raw).take(2).read_to_end(&mut magic)?;
-    let rejoined = BufReader::with_capacity(1 << 16, Cursor::new(magic.clone()).chain(raw));
-    if magic == [0x1f, 0x8b] {
-        // MultiGzDecoder reads concatenated members as one stream.
-        Ok(Box::new(BufReader::with_capacity(
-            1 << 16,
-            MultiGzDecoder::new(rejoined),
-        )))
-    } else {
-        Ok(Box::new(rejoined))
+/// Wrap a reader, decompressing gzip, bzip2 or xz detected by magic bytes.
+fn open_input(mut raw: Box<dyn Read>) -> Result<Box<dyn BufRead>> {
+    let mut head = Vec::with_capacity(6);
+    (&mut raw)
+        .take(6)
+        .read_to_end(&mut head)
+        .map_err(|e| format!("I/O error: {e}"))?;
+    for (magic, name) in [(&b"\x28\xb5\x2f\xfd"[..], "zstd"), (b"PK\x03\x04", "ZIP")] {
+        if head.starts_with(magic) {
+            return Err(format!(
+                "{name}-compressed input is not supported; decompress it first"
+            ));
+        }
     }
+    let rejoined = BufReader::with_capacity(1 << 16, Cursor::new(head.clone()).chain(raw));
+    let buffered =
+        |r: Box<dyn Read>| -> Box<dyn BufRead> { Box::new(BufReader::with_capacity(1 << 16, r)) };
+    // Each decoder reads concatenated members/streams as one input.
+    Ok(if head.starts_with(b"\x1f\x8b") {
+        buffered(Box::new(MultiGzDecoder::new(rejoined)))
+    } else if head.starts_with(b"BZh") {
+        buffered(Box::new(MultiBzDecoder::new(rejoined)))
+    } else if head == b"\xfd7zXZ\x00" {
+        buffered(Box::new(XzDecoder::new_multi_decoder(rejoined)))
+    } else {
+        Box::new(rejoined)
+    })
 }
 
 fn write_record<W: Write>(out: &mut W, header: &[u8], seq: &[u8]) -> io::Result<()> {
@@ -111,14 +127,14 @@ fn convert<R: BufRead + ?Sized, W: Write>(inp: &mut R, out: &mut W) -> Result<us
                 finish(h, &seq, header_line, out)?;
                 records += 1;
             }
-            let mut h = &line[1..];
-            if let Some(stripped) = h.strip_suffix(b"\n") {
-                h = stripped;
-            }
-            if let Some(stripped) = h.strip_suffix(b"\r") {
-                h = stripped;
-            }
-            header = Some(h.to_vec());
+            // Every CR is removed from the definition line (spec section 2).
+            header = Some(
+                line[1..]
+                    .iter()
+                    .copied()
+                    .filter(|&b| b != b'\r' && b != b'\n')
+                    .collect(),
+            );
             header_line = lineno;
             seq.clear();
             continue;
@@ -176,7 +192,7 @@ fn run(input: &str, output: Option<&str>) -> Result<()> {
     } else {
         Box::new(File::open(input).map_err(|e| format!("cannot open input {input}: {e}"))?)
     };
-    let mut inp = open_input(raw).map_err(|e| format!("I/O error: {e}"))?;
+    let mut inp = open_input(raw)?;
 
     if output == "-" {
         let stdout = io::stdout();

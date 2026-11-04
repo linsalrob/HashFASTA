@@ -2,10 +2,15 @@
  *
  * Usage: hashfasta INPUT [-o OUTPUT]   ('-' means stdin / stdout)
  *
- * zlib's gzread() detects gzip by its magic bytes, reads plain input
- * transparently and reads concatenated gzip members as one stream.
+ * Input format is detected from its magic bytes and decoded as a stream:
+ * gzip (zlib inflate), bzip2 (libbz2) or xz (liblzma), each reading
+ * concatenated members/streams as one input; anything else is plain text.
+ * Output is written with zlib's gzwrite().
  */
+#include <bzlib.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <lzma.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +27,7 @@
 #define OUTPUT_SUFFIX ".hash.fasta.gz"
 #define USAGE "usage: hashfasta INPUT [-o OUTPUT]   ('-' means stdin/stdout)\n"
 
+static const char *COMPRESSION_SUFFIXES[] = {".gz", ".bgz", ".bz2", ".xz"};
 static const char *FASTA_SUFFIXES[] = {".fa", ".fas", ".fasta", ".fna",
                                        ".ffn", ".faa", ".frn", ".fsa"};
 
@@ -37,6 +43,182 @@ static void die(const char *fmt, ...) {
     if (tmp_path) unlink(tmp_path);
     exit(1);
 }
+
+/* ---- streaming input decoder ---------------------------------------- */
+
+enum format { FMT_PLAIN, FMT_GZIP, FMT_BZIP2, FMT_XZ };
+
+typedef struct {
+    int fd;
+    enum format fmt;
+    unsigned char *in;   /* raw (possibly compressed) bytes */
+    size_t in_pos, in_len;
+    int in_eof;
+    int member_done;     /* gzip/bzip2: current member finished */
+    int done;            /* no more decoded output */
+    z_stream z;
+    bz_stream bz;
+    lzma_stream lz;
+} reader;
+
+static void fill(reader *r) {
+    ssize_t n;
+    do n = read(r->fd, r->in, IO_BUFFER);
+    while (n < 0 && errno == EINTR);
+    if (n < 0) die("read failed: %s", strerror(errno));
+    r->in_pos = 0;
+    r->in_len = (size_t)n;
+    if (n == 0) r->in_eof = 1;
+}
+
+static void reader_open(reader *r, int fd) {
+    static const unsigned char xz_magic[6] = {0xfd, '7', 'z', 'X', 'Z', 0x00};
+    const unsigned char *h;
+    memset(r, 0, sizeof *r);
+    r->fd = fd;
+    r->in = malloc(IO_BUFFER);
+    if (!r->in) die("out of memory");
+    /* Read at least 6 bytes (or to EOF) to see the magic number. */
+    while (r->in_len < 6) {
+        ssize_t n = read(fd, r->in + r->in_len, IO_BUFFER - r->in_len);
+        if (n < 0 && errno == EINTR) continue;
+        if (n < 0) die("read failed: %s", strerror(errno));
+        if (n == 0) {
+            r->in_eof = 1;
+            break;
+        }
+        r->in_len += (size_t)n;
+    }
+    h = r->in;
+    if (r->in_len >= 4 && memcmp(h, "\x28\xb5\x2f\xfd", 4) == 0)
+        die("zstd-compressed input is not supported; decompress it first");
+    if (r->in_len >= 4 && memcmp(h, "PK\x03\x04", 4) == 0)
+        die("ZIP-compressed input is not supported; decompress it first");
+    if (r->in_len >= 2 && h[0] == 0x1f && h[1] == 0x8b) {
+        r->fmt = FMT_GZIP;
+        if (inflateInit2(&r->z, 15 + 16) != Z_OK) die("zlib initialisation failed");
+    } else if (r->in_len >= 3 && memcmp(h, "BZh", 3) == 0) {
+        r->fmt = FMT_BZIP2;
+        if (BZ2_bzDecompressInit(&r->bz, 0, 0) != BZ_OK) die("bzip2 initialisation failed");
+    } else if (r->in_len >= 6 && memcmp(h, xz_magic, 6) == 0) {
+        lzma_stream init = LZMA_STREAM_INIT;
+        r->fmt = FMT_XZ;
+        r->lz = init;
+        if (lzma_stream_decoder(&r->lz, UINT64_MAX, LZMA_CONCATENATED) != LZMA_OK)
+            die("xz initialisation failed");
+    } else {
+        r->fmt = FMT_PLAIN;
+    }
+}
+
+static size_t read_gzip(reader *r, unsigned char *out, size_t cap) {
+    for (;;) {
+        size_t produced;
+        int ret;
+        if (r->in_pos == r->in_len && !r->in_eof) fill(r);
+        if (r->member_done) {
+            if (r->in_pos == r->in_len) return 0; /* end of the last member */
+            inflateReset(&r->z);
+            r->member_done = 0;
+        }
+        r->z.next_in = r->in + r->in_pos;
+        r->z.avail_in = (uInt)(r->in_len - r->in_pos);
+        r->z.next_out = out;
+        r->z.avail_out = (uInt)cap;
+        ret = inflate(&r->z, Z_NO_FLUSH);
+        r->in_pos = r->in_len - r->z.avail_in;
+        produced = cap - r->z.avail_out;
+        if (ret == Z_STREAM_END) {
+            r->member_done = 1;
+        } else if (ret == Z_BUF_ERROR) {
+            if (r->in_eof && r->in_pos == r->in_len) die("truncated gzip input");
+        } else if (ret != Z_OK) {
+            die("corrupt gzip input: %s", r->z.msg ? r->z.msg : zError(ret));
+        }
+        if (produced) return produced;
+    }
+}
+
+static size_t read_bzip2(reader *r, unsigned char *out, size_t cap) {
+    for (;;) {
+        size_t produced;
+        int ret;
+        if (r->in_pos == r->in_len && !r->in_eof) fill(r);
+        if (r->member_done) {
+            if (r->in_pos == r->in_len) return 0;
+            BZ2_bzDecompressEnd(&r->bz);
+            memset(&r->bz, 0, sizeof r->bz);
+            if (BZ2_bzDecompressInit(&r->bz, 0, 0) != BZ_OK) die("bzip2 initialisation failed");
+            r->member_done = 0;
+        }
+        r->bz.next_in = (char *)r->in + r->in_pos;
+        r->bz.avail_in = (unsigned)(r->in_len - r->in_pos);
+        r->bz.next_out = (char *)out;
+        r->bz.avail_out = (unsigned)cap;
+        ret = BZ2_bzDecompress(&r->bz);
+        r->in_pos = r->in_len - r->bz.avail_in;
+        produced = cap - r->bz.avail_out;
+        if (ret == BZ_STREAM_END) {
+            r->member_done = 1;
+        } else if (ret != BZ_OK) {
+            die("corrupt bzip2 input (error %d)", ret);
+        } else if (!produced && r->in_eof && r->in_pos == r->in_len) {
+            die("truncated bzip2 input");
+        }
+        if (produced) return produced;
+    }
+}
+
+static size_t read_xz(reader *r, unsigned char *out, size_t cap) {
+    for (;;) {
+        size_t produced;
+        lzma_ret ret;
+        if (r->done) return 0;
+        if (r->in_pos == r->in_len && !r->in_eof) fill(r);
+        r->lz.next_in = r->in + r->in_pos;
+        r->lz.avail_in = r->in_len - r->in_pos;
+        r->lz.next_out = out;
+        r->lz.avail_out = cap;
+        ret = lzma_code(&r->lz, r->in_eof ? LZMA_FINISH : LZMA_RUN);
+        r->in_pos = r->in_len - r->lz.avail_in;
+        produced = cap - r->lz.avail_out;
+        if (ret == LZMA_STREAM_END) {
+            r->done = 1;
+        } else if (ret == LZMA_BUF_ERROR) {
+            die("truncated xz input");
+        } else if (ret != LZMA_OK) {
+            die("corrupt xz input (liblzma error %d)", (int)ret);
+        }
+        if (produced) return produced;
+    }
+}
+
+/* Decoded bytes into out (up to cap); 0 at end of input. Dies on error. */
+static size_t reader_read(reader *r, unsigned char *out, size_t cap) {
+    switch (r->fmt) {
+    case FMT_GZIP: return read_gzip(r, out, cap);
+    case FMT_BZIP2: return read_bzip2(r, out, cap);
+    case FMT_XZ: return read_xz(r, out, cap);
+    default: break;
+    }
+    if (r->in_pos == r->in_len && !r->in_eof) fill(r);
+    {
+        size_t n = r->in_len - r->in_pos < cap ? r->in_len - r->in_pos : cap;
+        memcpy(out, r->in + r->in_pos, n);
+        r->in_pos += n;
+        return n;
+    }
+}
+
+static void reader_close(reader *r) {
+    if (r->fmt == FMT_GZIP) inflateEnd(&r->z);
+    if (r->fmt == FMT_BZIP2) BZ2_bzDecompressEnd(&r->bz);
+    if (r->fmt == FMT_XZ) lzma_end(&r->lz);
+    free(r->in);
+    if (r->fd != STDIN_FILENO) close(r->fd);
+}
+
+/* ---- conversion ------------------------------------------------------ */
 
 typedef struct {
     unsigned char *data;
@@ -104,17 +286,17 @@ static void write_record(gzFile out, const buffer *header, const buffer *seq,
 enum state { LINE_START, IN_HEADER, IN_SEQ };
 
 /* Stream FASTA records from in to out, holding one record in memory. */
-static void convert(gzFile in, gzFile out) {
+static void convert(reader *in, gzFile out) {
     unsigned char *chunk = malloc(IO_BUFFER);
     buffer header = {0}, seq = {0};
     enum state st = LINE_START;
     int have_header = 0;
     size_t lineno = 0, header_line = 0;
-    int n;
+    size_t n;
 
     if (!chunk) die("out of memory");
-    while ((n = gzread(in, chunk, IO_BUFFER)) > 0) {
-        int i;
+    while ((n = reader_read(in, chunk, IO_BUFFER)) > 0) {
+        size_t i;
         for (i = 0; i < n; i++) {
             unsigned char c = chunk[i];
             if (st == LINE_START) {
@@ -131,12 +313,9 @@ static void convert(gzFile in, gzFile out) {
                 st = IN_SEQ;
             }
             if (st == IN_HEADER) {
-                if (c == '\n') {
-                    if (header.len && header.data[header.len - 1] == '\r') header.len--;
-                    st = LINE_START;
-                } else {
-                    buf_push(&header, c);
-                }
+                /* Every CR is removed from the definition line (spec section 2). */
+                if (c == '\n') st = LINE_START;
+                else if (c != '\r') buf_push(&header, c);
                 continue;
             }
             /* IN_SEQ */
@@ -154,12 +333,6 @@ static void convert(gzFile in, gzFile out) {
             }
         }
     }
-    if (n < 0) {
-        int err;
-        const char *msg = gzerror(in, &err);
-        die("read failed: %s", err == Z_ERRNO ? strerror(errno) : msg);
-    }
-    if (st == IN_HEADER && header.len && header.data[header.len - 1] == '\r') header.len--;
     if (!have_header) die("input contains no FASTA records");
     write_record(out, &header, &seq, header_line);
     free(chunk);
@@ -167,18 +340,25 @@ static void convert(gzFile in, gzFile out) {
     free(seq.data);
 }
 
-static char *default_output_path(const char *input) {
-    size_t len = strlen(input), i;
-    char *out = malloc(len + sizeof OUTPUT_SUFFIX);
-    if (!out) die("out of memory");
-    if (len >= 3 && strcmp(input + len - 3, ".gz") == 0) len -= 3;
-    for (i = 0; i < sizeof FASTA_SUFFIXES / sizeof *FASTA_SUFFIXES; i++) {
-        size_t s = strlen(FASTA_SUFFIXES[i]);
-        if (len >= s && strncmp(input + len - s, FASTA_SUFFIXES[i], s) == 0) {
-            len -= s;
-            break;
+/* Shorten *len by the first of suffixes that name[0..*len) ends with. */
+static void strip_suffix(const char *name, size_t *len, const char **suffixes, size_t count) {
+    size_t i;
+    for (i = 0; i < count; i++) {
+        size_t s = strlen(suffixes[i]);
+        if (*len >= s && strncmp(name + *len - s, suffixes[i], s) == 0) {
+            *len -= s;
+            return;
         }
     }
+}
+
+static char *default_output_path(const char *input) {
+    size_t len = strlen(input);
+    char *out = malloc(len + sizeof OUTPUT_SUFFIX);
+    if (!out) die("out of memory");
+    strip_suffix(input, &len, COMPRESSION_SUFFIXES,
+                 sizeof COMPRESSION_SUFFIXES / sizeof *COMPRESSION_SUFFIXES);
+    strip_suffix(input, &len, FASTA_SUFFIXES, sizeof FASTA_SUFFIXES / sizeof *FASTA_SUFFIXES);
     memcpy(out, input, len);
     strcpy(out + len, OUTPUT_SUFFIX);
     return out;
@@ -198,8 +378,9 @@ static void close_output(gzFile out) {
 int main(int argc, char **argv) {
     const char *input = NULL, *output = NULL;
     char *default_output = NULL;
-    gzFile in, out;
-    int i;
+    reader in;
+    gzFile out;
+    int i, fd;
 
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -222,9 +403,9 @@ int main(int argc, char **argv) {
     if (strcmp(input, "-") != 0 && strcmp(output, "-") != 0 && same_file(input, output))
         die("output path %s would overwrite the input", output);
 
-    in = strcmp(input, "-") == 0 ? gzdopen(STDIN_FILENO, "rb") : gzopen(input, "rb");
-    if (!in) die("cannot open input %s: %s", input, strerror(errno));
-    gzbuffer(in, IO_BUFFER);
+    fd = strcmp(input, "-") == 0 ? STDIN_FILENO : open(input, O_RDONLY);
+    if (fd < 0) die("cannot open input %s: %s", input, strerror(errno));
+    reader_open(&in, fd);
 
     if (strcmp(output, "-") == 0) {
         out = gzdopen(STDOUT_FILENO, "wb");
@@ -244,8 +425,8 @@ int main(int argc, char **argv) {
     }
     gzbuffer(out, IO_BUFFER);
 
-    convert(in, out);
-    gzclose(in);
+    convert(&in, out);
+    reader_close(&in);
     close_output(out);
     if (tmp_path) {
         if (rename(tmp_path, output) != 0) die("cannot write %s: %s", output, strerror(errno));
