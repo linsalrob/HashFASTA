@@ -1,21 +1,41 @@
 # HashFASTA
 
-FASTA files can reuse an ID for different sequences. HashFASTA converts each FASTA record to a sequence-keyed FASTA record, preserving the original full header as metadata. Agents should convert FASTA before analysis so they cannot silently select the wrong molecule by a reused name.
+FASTA identifiers are not always unique: two records can share the same first identifier while containing different sequences. HashFASTA converts each record to a sequence-keyed FASTA record and preserves the original definition line as metadata, so downstream tools and agents can distinguish sequences reliably.
 
-The draft v0.1 convention writes gzip-compressed files named `*.hash.fasta.gz`. It reads plain, gzip, bzip2 or xz FASTA and always streams gzip output.
+The draft v0.1 format writes gzip-compressed files named `*.hash.fasta.gz`. It accepts plain, gzip/BGZF, bzip2, or xz FASTA input and streams gzip output.
 
 - [Draft specification v0.1](spec/HASHFASTA-v0.1.md)
 - [Implementation issue](https://github.com/linsalrob/HashFASTA/issues/1)
 - [Compressed test fixtures and provenance](tests/data/README.md)
 
-The specification and fixture set are open for comment.
+## Runtime and scaling
 
-## Converting a FASTA file
+The five implementations have been benchmarked on DNA and protein FASTA inputs, from a 97 kbp crAssphage genome to the 3.10 Gbp human GRCh38 primary assembly, and from small proteomes to 296 million protein residues. The figure shows median wall time against input size; each line is one implementation.
 
-Five interchangeable implementations produce byte-identical FASTA text (after decompression). Use whichever one runs on your system; you do not need to know the language. Python and Perl need no build step.
+![HashFASTA median runtime scaling for DNA (left) and protein (right)](benchmarks/results/runtime_scaling.png)
+
+[Full benchmark report](benchmarks/REPORT.md) · [Benchmark data, figure, and scripts](benchmarks/)
+
+On the largest inputs, the measured results were:
+
+| Implementation | Human GRCh38, 3.10 Gbp | Peak RSS | BUSCO vertebrata, 296 M aa | Peak RSS |
+| --- | ---: | ---: | ---: | ---: |
+| Rust | 390 s (7.9 Mbp/s) | 240 MiB | 15.1 s (19.6 M aa/s) | ≤ 4 MiB |
+| C | 504 s (6.1 Mbp/s) | 241 MiB | 11.3 s (26.1 M aa/s) | ≤ 4 MiB |
+| Python | 558 s (5.6 Mbp/s) | 1383 MiB | 14.3 s (20.7 M aa/s) | 17 MiB |
+| C++ | 571 s (5.4 Mbp/s) | 245 MiB | 13.1 s (22.5 M aa/s) | ≤ 4 MiB |
+| Perl | 815 s (3.8 Mbp/s) | 489 MiB | 31.0 s (9.6 M aa/s) | 12 MiB |
+
+All five produced byte-identical decompressed output for every benchmark input. For DNA, the empirical log-log runtime slopes were approximately 0.98 for every implementation on inputs of at least one million bases, consistent with linear scaling over the measured range. Protein results also trend close to linear, but the slope estimates are less conclusive: protein datasets differ in both record count and record length, and confidence intervals for C, C++, and Rust include 1. Runtime rankings also differ by workload: Rust was fastest on the full human genome, while C was fastest on the largest protein set.
+
+Memory use is driven mainly by the longest individual sequence, which each implementation must hold while hashing it. In these measurements the compiled tools used about 240 MiB on human chr1–4; Python used more memory (1.38 GiB on the full human input). These are results from one Setonix benchmark and are not universal performance guarantees. The report documents hardware, toolchains, measurement method, confidence intervals, and caveats.
+
+## Convert a FASTA file
+
+Use whichever implementation is available. Python and Perl need no compiled build.
 
 ```sh
-# Python, installed with pip (Python >= 3.9): provides the `hashfasta` command and library
+# Python, installed with pip (Python >= 3.9): command and library
 pip install "git+https://github.com/linsalrob/HashFASTA#subdirectory=implementations/python"
 hashfasta sample.fasta.gz
 
@@ -25,13 +45,13 @@ python3 implementations/python/run_hashfasta.py sample.fasta.gz
 # Perl 5 (core modules only)
 perl implementations/perl/hashfasta.pl sample.fasta.gz
 
-# Compiled versions (build first, see below)
+# Compiled versions (build first; see below)
 implementations/rust/target/release/hashfasta sample.fasta.gz
 implementations/c/hashfasta sample.fasta.gz
 implementations/cpp/hashfasta sample.fasta.gz
 ```
 
-Each of these writes `sample.hash.fasta.gz` beside the input. Every implementation has the same interface:
+Each command writes `sample.hash.fasta.gz` beside the input by default. All implementations use the same interface:
 
 ```text
 hashfasta INPUT [-o OUTPUT]
@@ -47,56 +67,47 @@ hashfasta INPUT [-o OUTPUT]
 | `hashfasta - < x.fa > y.hash.fasta.gz` | stdin | stdout |
 | `hashfasta x.fa -o -` | `x.fa` | stdout |
 
-- Input may be plain FASTA or FASTA compressed with gzip/BGZF, bzip2 or xz. The format is detected from the content, not the name, and concatenated members/streams are accepted. zstd and ZIP input are rejected with an error; decompress them first.
-- The default output name drops one compression suffix (`.gz`, `.bgz`, `.bz2`, `.xz`), then one FASTA suffix (`.fa`, `.fas`, `.fasta`, `.fna`, `.ffn`, `.faa`, `.frn`, `.fsa`), and adds `.hash.fasta.gz`.
-- Windows line endings are removed: output never contains a carriage return.
-- Lines starting with `;` are comments and are dropped. A `;` anywhere else in a sequence is an error.
-- Output is **always gzip**. Read it with `gzip -cd x.hash.fasta.gz` or `zcat`.
-- The input file is never modified. Output is written to a temporary sibling (`OUTPUT.tmp.PID`) and renamed into place only on success, so a failed run leaves no partial file.
-- Errors go to stderr with a non-zero exit status: `1` for invalid input or I/O failures, `2` for usage errors. Invalid input includes an empty sequence, sequence data before the first `>`, non-ASCII or non-printable sequence bytes, an empty file, or a corrupt or truncated compressed stream.
+## Output and input rules
 
-Each output record looks like:
+An output record has a SHA-256 key and the original full definition line in brackets:
 
 ```text
->sha256_<SHA-256 of the normalized sequence> [<original definition line, with \ [ ] escaped>]
-<normalized sequence: whitespace removed, a-z uppercased, wrapped at 80 columns>
+>sha256_<SHA-256 of normalized sequence> [<original definition line, with \\ [ ] escaped>]
+<normalized sequence, wrapped at 80 columns>
 ```
 
-The first token is the record identity. Records with the same key have identical normalized sequences, and both are kept. See the [specification](spec/HASHFASTA-v0.1.md) for the exact rules.
+The first token is the record identity. Identical sequences have identical keys; duplicate records are retained.
 
-The Python package is also a library (`hashfasta.convert`, `read_fasta`, `read_hashfasta`, ...); see [implementations/python/README.md](implementations/python/README.md).
+- Compression is detected from file contents, not the filename. Gzip/BGZF, bzip2, and xz inputs are supported, including concatenated members/streams. zstd and ZIP are not supported.
+- Output is always gzip. Read it with `gzip -cd file.hash.fasta.gz` or `zcat`.
+- The default output name removes one compression suffix and one recognized FASTA suffix, then adds `.hash.fasta.gz`.
+- Sequence whitespace is removed and lowercase letters are uppercased. Output lines use Unix line endings and are wrapped at 80 columns.
+- Lines beginning with `;` are comments and are dropped; a semicolon elsewhere in a sequence is an error.
+- The input is never modified. Output is written to a temporary sibling and renamed only after a successful conversion.
+- Invalid input and I/O errors exit non-zero. Invalid input includes empty records, sequence text before the first header, non-ASCII or non-printable sequence bytes, empty files, and corrupt or truncated compressed streams.
 
-## Building
+See the [specification](spec/HASHFASTA-v0.1.md) for the complete normalization and escaping rules.
+
+## Build
 
 | Language | Requirements | Build |
 | --- | --- | --- |
-| Python | Python ≥ 3.6 from a checkout; ≥ 3.9 to `pip install` | none, or `pip install implementations/python` |
-| Perl | Perl 5 core modules (`IO::Compress::Gzip`, `IO::Uncompress::Gunzip`, `IO::Uncompress::Bunzip2`, `Digest::SHA`); the `xz` command for xz input | none |
-| Rust | cargo (crates `flate2`, `bzip2`, `liblzma`, `sha2`) and a C compiler for the bundled liblzma | `cargo build --release --manifest-path implementations/rust/Cargo.toml` |
-| C | C99 compiler, zlib, libbz2 and liblzma headers | `make -C implementations/c` |
-| C++ | C++17 compiler, zlib, libbz2 and liblzma headers | `make -C implementations/cpp` |
+| Python | Python ≥ 3.6 from checkout; ≥ 3.9 for `pip install` | none, or `pip install implementations/python` |
+| Perl | Perl 5 core modules; `xz` command for xz input | none |
+| Rust | Cargo, C compiler, and dependencies in Cargo manifest | `cargo build --release --manifest-path implementations/rust/Cargo.toml` |
+| C | C99 compiler, zlib, libbz2, liblzma headers | `make -C implementations/c` |
+| C++ | C++17 compiler, zlib, libbz2, liblzma headers | `make -C implementations/cpp` |
 
-On Debian/Ubuntu the C and C++ build needs `zlib1g-dev libbz2-dev liblzma-dev`.
+On Debian/Ubuntu, C and C++ builds need `zlib1g-dev libbz2-dev liblzma-dev`. Run `make build` at the repository root to build all compiled versions.
 
-`make build` builds all three compiled versions.
-
-## Testing
+## Test
 
 ```sh
-make test                                  # build, then test every implementation
-python3 tests/run_conformance.py           # test every implementation (already built)
-python3 tests/run_conformance.py c perl    # test selected ones
-python3 tests/run_conformance.py --cmd /path/to/tool   # test any other converter
+make test
+python3 tests/run_conformance.py           # all implementations (already built)
+python3 tests/run_conformance.py c perl    # selected implementations
+python3 tests/run_conformance.py --cmd /path/to/tool
+python3 -m unittest discover -s implementations/python/tests
 ```
 
-The shared runner `tests/run_conformance.py` runs the same checks against each tool:
-
-- every `tests/data/*.input.fasta.gz` / `*.expected.hash.fasta.gz` pair (real crAssphage data, duplicate cases, and the `edge-*` normalization, escaping, wrapping, CRLF and comment-line cases), comparing the decompressed bytes exactly;
-- each input as gzip, plain, bzip2 and xz, multi-member, misnamed and on stdin, plus default output naming for every suffix combination;
-- every output checked with `gzip -t` and a full decompression, and for the absence of carriage returns;
-- every `tests/data/invalid/` input, zstd/ZIP input and truncated gzip, bzip2 and xz must fail without leaving an output file;
-- a cross-check that all implementations give byte-identical output on seeded random FASTA.
-
-`python3 tests/make_edge_fixtures.py` regenerates the edge and invalid fixtures from the specification's rules. `python3 -m unittest discover -s implementations/python/tests` runs the Python library's unit tests.
-
-The input files are checksummed before and after each run to confirm they were not modified. CI runs `make test` (`.github/workflows/conformance.yml`) and builds, checks and tests the Python package (`.github/workflows/python-package.yml`) on every push and pull request.
+The shared conformance runner checks expected outputs, compressed and plain input modes, stdin, output naming, malformed files, and byte-identical cross-implementation output. CI builds and tests the implementations on pushes and pull requests.
