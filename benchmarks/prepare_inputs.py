@@ -40,6 +40,7 @@ def build(dataset, outdir):
     budget = dataset.get("max_residues")
     records = residues = plain_bytes = 0
     stop = False
+    last = b"\n"  # last byte written
     tmp = path + ".partial"
     with gzip.GzipFile(tmp, "wb", compresslevel=6, mtime=0) as out:
         for src in dataset["sources"]:
@@ -54,6 +55,13 @@ def build(dataset, outdir):
                         residues += len(line.translate(None, WHITESPACE))
                     out.write(line)
                     plain_bytes += len(line)
+                    last = line[-1:]
+            # A source may lack a final newline; keep the next source's first
+            # header on its own line.
+            if last != b"\n":
+                out.write(b"\n")
+                plain_bytes += 1
+                last = b"\n"
             if stop:
                 break
     os.replace(tmp, path)
