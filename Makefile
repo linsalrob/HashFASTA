@@ -16,6 +16,7 @@ cpp:
 test: build
 	$(PYTHON) -m unittest discover -s implementations/python/tests
 	$(PYTHON) tests/run_conformance.py
+	$(PYTHON) tests/run_conformance.py --threads 4
 
 clean:
 	$(CARGO) clean --manifest-path implementations/rust/Cargo.toml

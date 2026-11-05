@@ -1,12 +1,15 @@
 //! HashFASTA v0.1 converter (Rust port of the Python reference).
 //!
-//! Usage: hashfasta INPUT [-o OUTPUT]   ('-' means stdin / stdout)
+//! Usage: hashfasta INPUT [-o OUTPUT] [--threads N]   ('-' means stdin / stdout)
+
+mod pgzip;
 
 use bzip2::bufread::MultiBzDecoder;
 use flate2::bufread::MultiGzDecoder;
 use flate2::write::GzEncoder;
 use flate2::{Compression, GzBuilder};
 use liblzma::bufread::XzDecoder;
+use pgzip::ParallelGz;
 use sha2::{Digest, Sha256};
 use std::fs::{self, File};
 use std::io::{self, BufRead, BufReader, BufWriter, Cursor, Read, Write};
@@ -20,7 +23,8 @@ const FASTA_SUFFIXES: [&str; 8] = [
     ".fa", ".fas", ".fasta", ".fna", ".ffn", ".faa", ".frn", ".fsa",
 ];
 const OUTPUT_SUFFIX: &str = ".hash.fasta.gz";
-const USAGE: &str = "usage: hashfasta INPUT [-o OUTPUT]   ('-' means stdin/stdout)\n";
+const USAGE: &str = "usage: hashfasta INPUT [-o OUTPUT] [--threads N]   ('-' means stdin/stdout)\n";
+const LEVEL: u32 = 6; // gzip compression level
 
 type Result<T> = std::result::Result<T, String>;
 
@@ -202,11 +206,59 @@ fn create_temp(output: &str) -> Result<(String, File)> {
     Err(format!("cannot create a temporary file beside {output}"))
 }
 
-fn gz_writer<W: Write>(w: W) -> GzEncoder<W> {
-    GzBuilder::new().mtime(0).write(w, Compression::default())
+/// gzip output: flate2's encoder, or the parallel writer for threads > 1.
+enum Encoder<W: Write> {
+    Single(GzEncoder<W>),
+    Parallel(ParallelGz<W>),
 }
 
-fn run(input: &str, output: Option<&str>) -> Result<()> {
+impl<W: Write> Encoder<W> {
+    fn new(w: W, threads: usize) -> Result<Self> {
+        if threads > 1 {
+            let gz = ParallelGz::new(w, LEVEL, threads).map_err(|e| format!("I/O error: {e}"))?;
+            return Ok(Encoder::Parallel(gz));
+        }
+        Ok(Encoder::Single(
+            GzBuilder::new().mtime(0).write(w, Compression::new(LEVEL)),
+        ))
+    }
+
+    fn finish(self) -> io::Result<W> {
+        match self {
+            Encoder::Single(gz) => gz.finish(),
+            Encoder::Parallel(gz) => gz.finish(),
+        }
+    }
+}
+
+impl<W: Write> Write for Encoder<W> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        match self {
+            Encoder::Single(gz) => gz.write(buf),
+            Encoder::Parallel(gz) => gz.write(buf),
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Encoder::Single(gz) => gz.flush(),
+            Encoder::Parallel(gz) => gz.flush(),
+        }
+    }
+}
+
+/// Convert through a buffer in front of the encoder, so it compresses large
+/// chunks rather than one 80-byte line at a time: since flate2 1.0.28 every
+/// write zero-fills the encoder's spare output buffer, which costs up to a
+/// fifth of the run time with small writes (rust-lang/flate2-rs#395).
+fn convert_buffered<R: BufRead + ?Sized, W: Write>(inp: &mut R, gz: W) -> Result<W> {
+    let mut buf = BufWriter::with_capacity(1 << 17, gz);
+    convert(inp, &mut buf)?;
+    buf.into_inner()
+        .map_err(|e| format!("I/O error: {}", e.error()))
+}
+
+fn run(input: &str, output: Option<&str>, threads: usize) -> Result<()> {
     let output = match output {
         Some(o) => o.to_string(),
         None if input == "-" => "-".to_string(),
@@ -225,8 +277,8 @@ fn run(input: &str, output: Option<&str>) -> Result<()> {
 
     if output == "-" {
         let stdout = io::stdout();
-        let mut gz = gz_writer(BufWriter::new(stdout.lock()));
-        convert(&mut inp, &mut gz)?;
+        let gz = Encoder::new(BufWriter::new(stdout.lock()), threads)?;
+        let gz = convert_buffered(&mut inp, gz)?;
         gz.finish()
             .and_then(|mut w| w.flush())
             .map_err(|e| format!("I/O error: {e}"))?;
@@ -236,8 +288,7 @@ fn run(input: &str, output: Option<&str>) -> Result<()> {
     // Write a temporary sibling, renamed into place only on success.
     let (tmp, fh) = create_temp(&output)?;
     let result = (|| -> Result<()> {
-        let mut gz = gz_writer(BufWriter::new(fh));
-        convert(&mut inp, &mut gz)?;
+        let gz = convert_buffered(&mut inp, Encoder::new(BufWriter::new(fh), threads)?)?;
         let w = gz.finish().map_err(|e| format!("I/O error: {e}"))?;
         let fh = w.into_inner().map_err(|e| format!("I/O error: {e}"))?;
         fh.sync_all().map_err(|e| format!("I/O error: {e}"))?;
@@ -249,9 +300,15 @@ fn run(input: &str, output: Option<&str>) -> Result<()> {
     result
 }
 
-fn parse_args(args: &[String]) -> Option<(String, Option<String>)> {
+/// An integer from 1 to 256.
+fn parse_threads(value: &str) -> Option<usize> {
+    value.parse().ok().filter(|n| (1..=256).contains(n))
+}
+
+fn parse_args(args: &[String]) -> Option<(String, Option<String>, usize)> {
     let mut input = None;
     let mut output = None;
+    let mut threads = 1;
     let mut i = 0;
     while i < args.len() {
         let arg = args[i].as_str();
@@ -264,22 +321,31 @@ fn parse_args(args: &[String]) -> Option<(String, Option<String>)> {
             i += 2;
             continue;
         }
+        if arg == "--threads" {
+            let Some(n) = parse_threads(args.get(i + 1)?) else {
+                eprintln!("{PROG}: error: --threads needs an integer from 1 to 256");
+                return None;
+            };
+            threads = n;
+            i += 2;
+            continue;
+        }
         if (arg != "-" && arg.starts_with('-')) || input.is_some() {
             return None;
         }
         input = Some(arg.to_string());
         i += 1;
     }
-    Some((input?, output))
+    Some((input?, output, threads))
 }
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let Some((input, output)) = parse_args(&args) else {
+    let Some((input, output, threads)) = parse_args(&args) else {
         eprint!("{USAGE}");
         return ExitCode::from(2);
     };
-    match run(&input, output.as_deref()) {
+    match run(&input, output.as_deref(), threads) {
         Ok(()) => ExitCode::SUCCESS,
         Err(msg) => {
             eprintln!("{PROG}: error: {msg}");

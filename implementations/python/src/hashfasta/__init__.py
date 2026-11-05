@@ -2,7 +2,7 @@
 
 Command line::
 
-    hashfasta input.fasta[.gz|.bz2|.xz] [-o output.hash.fasta.gz]
+    hashfasta input.fasta[.gz|.bz2|.xz] [-o output.hash.fasta.gz] [--threads N]
 
 Library::
 
@@ -29,7 +29,7 @@ from .core import (
     unescape_header,
 )
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 SPEC_VERSION = "0.1"
 
 __all__ = [

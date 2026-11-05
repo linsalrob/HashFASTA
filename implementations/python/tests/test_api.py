@@ -9,6 +9,7 @@ import shutil
 import sys
 import tempfile
 import unittest
+import zlib
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
@@ -85,6 +86,23 @@ class ApiTests(unittest.TestCase):
         out = hashfasta.convert(src, self.path("dup.hash.fasta.gz"))
         with gzip.open(out) as got, gzip.open(os.path.join(DATA, "duplicate-id.expected.hash.fasta.gz")) as exp:
             self.assertEqual(got.read(), exp.read())
+
+    def test_convert_threads(self):
+        # Several 128 KiB blocks, one record spanning them, and a short tail.
+        data = b">long\n" + b"ACGTTGCAN" * 100000 + b"\n>short\nacgt\n"
+        src = self.path("big.fa", data)
+        single = hashfasta.convert(src, self.path("t1.hash.fasta.gz"))
+        multi = hashfasta.convert(src, self.path("t3.hash.fasta.gz"), threads=3)
+        with open(multi, "rb") as fh:
+            raw = fh.read()
+        member = zlib.decompressobj(31)
+        content = member.decompress(raw)
+        self.assertTrue(member.eof)
+        self.assertEqual(member.unused_data, b"")  # one gzip member
+        with gzip.open(single) as fh:
+            self.assertEqual(content, fh.read())
+        with self.assertRaises(ValueError):
+            hashfasta.convert(src, self.path("t0.hash.fasta.gz"), threads=0)
 
     def test_convert_stream_plain_text(self):
         out = io.BytesIO()
