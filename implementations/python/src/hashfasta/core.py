@@ -7,12 +7,14 @@ HashFASTA back. See spec/HASHFASTA-v0.1.md. Standard library only.
 
 import bz2
 import collections
+import concurrent.futures
 import gzip
 import hashlib
 import io
 import lzma
 import os
 import re
+import struct
 import sys
 import zlib
 
@@ -354,8 +356,98 @@ def convert_stream(inp, out):
     return n
 
 
-def _gzip_writer(fileobj):
-    return gzip.GzipFile(fileobj=fileobj, mode="wb", mtime=0, filename="", compresslevel=6)
+_LEVEL = 6  # gzip compression level
+_BLOCK = 128 * 1024  # uncompressed bytes per parallel compression job
+_WINDOW = 32768  # deflate window: the dictionary that primes the next block
+
+
+def _deflate_block(block, zdict, last, level):
+    if zdict:
+        c = zlib.compressobj(level, zlib.DEFLATED, -15, 8, zlib.Z_DEFAULT_STRATEGY, zdict=zdict)
+    else:
+        c = zlib.compressobj(level, zlib.DEFLATED, -15)
+    return c.compress(block) + c.flush(zlib.Z_FINISH if last else zlib.Z_SYNC_FLUSH)
+
+
+class _ParallelGzipWriter(object):
+    """Write one gzip member, compressing on several threads (pigz technique).
+
+    Output is cut into fixed-size blocks. Each is compressed as raw deflate on
+    a thread pool (zlib releases the GIL), primed with the previous 32 KiB as a
+    dictionary and ended with a sync flush (the last with Z_FINISH), so the
+    blocks join into a single deflate stream. Blocks are written in order
+    behind one gzip header; the CRC-32 is computed as blocks are submitted.
+    """
+
+    def __init__(self, fileobj, threads, level=_LEVEL):
+        self._out = fileobj
+        self._level = level
+        self._pool = concurrent.futures.ThreadPoolExecutor(threads)
+        self._pending = collections.deque()
+        self._max_pending = 2 * threads
+        self._buf = bytearray()
+        self._tail = b""
+        self._crc = 0
+        self._size = 0
+        # gzip header: deflate, no flags, mtime 0, no extra flags, OS = Unix
+        fileobj.write(b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03")
+
+    def _submit(self, block, last=False):
+        while len(self._pending) >= self._max_pending:
+            self._write_next()
+        self._crc = zlib.crc32(block, self._crc)
+        self._size += len(block)
+        try:
+            future = self._pool.submit(_deflate_block, block, self._tail, last, self._level)
+        except RuntimeError as e:  # "can't start new thread"
+            raise OSError("cannot start compression threads: %s" % e)
+        self._pending.append(future)
+        self._tail = (self._tail + block)[-_WINDOW:]
+
+    def _write_next(self):
+        self._out.write(self._pending.popleft().result())
+
+    def write(self, data):
+        view = memoryview(data)
+        pos = 0
+        if self._buf:
+            pos = min(_BLOCK - len(self._buf), len(view))
+            self._buf += view[:pos]
+            if len(self._buf) == _BLOCK:
+                self._submit(bytes(self._buf))
+                self._buf = bytearray()
+        while len(view) - pos >= _BLOCK:
+            self._submit(bytes(view[pos:pos + _BLOCK]))
+            pos += _BLOCK
+        self._buf += view[pos:]
+        return len(data)
+
+    def close(self):
+        """Compress what remains and write the gzip trailer."""
+        self._submit(bytes(self._buf), last=True)
+        self._buf = bytearray()
+        while self._pending:
+            self._write_next()
+        self._out.write(struct.pack("<II", self._crc & 0xFFFFFFFF, self._size & 0xFFFFFFFF))
+        self._pool.shutdown()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type is None:
+            self.close()
+        else:
+            for future in self._pending:
+                future.cancel()
+            self._pool.shutdown()
+        return False
+
+
+def _gzip_writer(fileobj, threads=1):
+    if threads > 1:
+        return _ParallelGzipWriter(fileobj, threads)
+    return gzip.GzipFile(fileobj=fileobj, mode="wb", mtime=0, filename="", compresslevel=_LEVEL)
 
 
 def _same_file(a, b):
@@ -381,14 +473,18 @@ def _create_temp(output_path):
     raise HashFastaError("cannot create a temporary file beside %s" % output_path)
 
 
-def convert(input_path, output_path=None):
+def convert(input_path, output_path=None, threads=1):
     """Convert ``input_path`` to gzip HashFASTA; return the output path.
 
     ``'-'`` means stdin / stdout. Without ``output_path`` a named input is
     written beside itself as ``<stem>.hash.fasta.gz`` and stdin goes to
     stdout. A file output is written to a temporary sibling and renamed into
-    place only on success. The input is never overwritten.
+    place only on success. The input is never overwritten. ``threads`` > 1
+    compresses the output on that many threads; the result is still one gzip
+    member with identical decompressed content.
     """
+    if not isinstance(threads, int) or threads < 1:
+        raise ValueError("threads must be a positive integer")
     if output_path is None:
         output_path = "-" if input_path == "-" else default_output_path(os.fspath(input_path))
     if input_path != "-" and output_path != "-" and _same_file(input_path, output_path):
@@ -399,12 +495,12 @@ def convert(input_path, output_path=None):
     try:
         inp = open_input(raw)
         if output_path == "-":
-            with _gzip_writer(sys.stdout.buffer) as gz:
+            with _gzip_writer(sys.stdout.buffer, threads) as gz:
                 convert_stream(inp, gz)
             sys.stdout.buffer.flush()
         else:
             tmp_path, fd = _create_temp(output_path)
-            with os.fdopen(fd, "wb") as fh, _gzip_writer(fh) as gz:
+            with os.fdopen(fd, "wb") as fh, _gzip_writer(fh, threads) as gz:
                 convert_stream(inp, gz)
             os.replace(tmp_path, output_path)
             tmp_path = None

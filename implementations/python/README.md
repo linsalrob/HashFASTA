@@ -13,7 +13,7 @@ Standard library only. Installing needs Python ≥ 3.10; the code itself also ru
 ## Install
 
 ```sh
-pip install "git+https://github.com/linsalrob/HashFASTA#subdirectory=implementations/python"
+pip install hashfasta
 # or, from a checkout
 pip install implementations/python
 ```
@@ -31,6 +31,7 @@ hashfasta sample.fna.gz                    # writes sample.hash.fasta.gz
 hashfasta sample.fa.bz2 -o out.hash.fasta.gz
 zcat x.fa.gz | hashfasta - > x.hash.fasta.gz
 python -m hashfasta sample.fasta.xz
+hashfasta human.fna.gz --threads 8         # compress the output on 8 threads
 ```
 
 Input may be plain FASTA or FASTA compressed with gzip/BGZF, bzip2 or xz. The format is detected from the content, not the file name.
@@ -54,7 +55,7 @@ hashfasta.sequence_key(hashfasta.normalize_sequence(b"acgt\n"))
 
 | Function | Purpose |
 | --- | --- |
-| `convert(input, output=None)` | File (or `"-"`) to gzip HashFASTA; returns the output path |
+| `convert(input, output=None, threads=1)` | File (or `"-"`) to gzip HashFASTA, compressing on `threads` threads; returns the output path |
 | `read_fasta(source)` | Yield `Record(key, header, sequence)` from plain/gz/bz2/xz FASTA |
 | `read_hashfasta(source, verify=True)` | Read a HashFASTA file back, unescaping headers |
 | `convert_stream(inp, out)` | Decompressed stream to uncompressed HashFASTA text |

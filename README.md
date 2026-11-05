@@ -46,8 +46,10 @@ implementations/cpp/hashfasta sample.fasta.gz
 Each command writes `sample.hash.fasta.gz` beside the input by default. All implementations use the same interface:
 
 ```text
-hashfasta INPUT [-o OUTPUT]
+hashfasta INPUT [-o OUTPUT] [--threads N]
 ```
+
+`--threads N` (default 1, at most 256) compresses the output on N threads, which is where most of the run time goes. The output is still one gzip stream with identical decompressed content; only the compressed bytes differ slightly. C, C++, Rust and Python use the threads; Perl accepts the option but stays single-threaded.
 
 | Invocation | Reads | Writes |
 | --- | --- | --- |
@@ -58,6 +60,7 @@ hashfasta INPUT [-o OUTPUT]
 | `hashfasta x.fa -o y.hash.fasta.gz` | `x.fa` | `y.hash.fasta.gz` |
 | `hashfasta - < x.fa > y.hash.fasta.gz` | stdin | stdout |
 | `hashfasta x.fa -o -` | `x.fa` | stdout |
+| `hashfasta x.fa --threads 8` | `x.fa` | `x.hash.fasta.gz`, compressed on 8 threads |
 
 ## Output and input rules
 
@@ -129,6 +132,7 @@ make test
 python3 tests/run_conformance.py           # all implementations (already built)
 python3 tests/run_conformance.py c perl    # selected implementations
 python3 tests/run_conformance.py --cmd /path/to/tool
+python3 tests/run_conformance.py --threads 4   # pass --threads 4 to every implementation
 python3 -m unittest discover -s implementations/python/tests
 ```
 

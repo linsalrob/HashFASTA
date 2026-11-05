@@ -1,0 +1,6 @@
+impl=rust threads=8
+commit=d792e0390cbd5473159584e57a760be96dde527e
+job=52228394 node=nid002803 partition=work
+allocation=cpus-per-task=16 mem-per-cpu=1840 MiB
+cpu=AMD EPYC 7763 64-Core Processor
+storage=node-local overlay

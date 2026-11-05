@@ -129,3 +129,82 @@ inputs measured here. They are not a complexity proof.
   node-to-node variation is not measured separately.
 - **Different compiler generations.** C used gcc 14 and C++ used GCC 7.5. The
   C++ result reflects the default build, not the best possible C++ build.
+
+## Parallel compression (`--threads`, issue #5)
+
+The single-threaded results above are for version 0.1. Version 0.2 adds
+`--threads N`, which compresses the output on N worker threads while the main
+thread keeps parsing and hashing. Perl accepts the option but stays
+single-threaded, so it is not benchmarked here.
+
+![Speedup against compression threads for three inputs](results/threads/threads_scaling.png)
+
+([SVG](results/threads/threads_scaling.svg) · raw data and summary in
+[`results/threads/`](results/threads/))
+
+**Why compression.** Before implementing anything, I profiled each converter
+with `perf` (`slurm/profile.slurm`, `profile_summary.py`,
+[`results/profile_stages.csv`](results/profile_stages.csv)). Output gzip
+compression took 83–90% of CPU time on human chr1–4 for C, C++, Rust and
+Python, and 62% for Perl. On the BUSCO proteins it took 50–64%, and 27% for
+Perl. Input decompression and SHA-256 were small by comparison.
+
+**Method.**
+- **Code:** commit `d792e03`. Inputs: A. thaliana (120 Mbp), human chr1–4
+  (880 Mbp) and BUSCO vertebrata (296 M aa).
+- **Runs:** for each implementation and N = 1, 2, 4 and 8, the same 1 warm-up
+  and 3 timed runs as above.
+- **Allocation:** one Slurm array per N (jobs 52228378–52228381), each
+  requesting `--cpus-per-task=2N` and 1840 MB per requested CPU. Slurm
+  allocated 2N cores and 3.68 GB per compression thread, the same per thread
+  at every N.
+- **Compression level:** unchanged at 6.
+- **Validation:** every run, at every thread count and in every
+  implementation, produced decompressed output identical to the
+  single-threaded benchmark.
+
+Median wall time, with speedup over 1 thread in brackets
+([`threads_summary.csv`](results/threads/threads_summary.csv)):
+
+| Implementation | Human chr1–4, 1 thread | 2 | 4 | 8 | BUSCO vertebrata, 1 thread | 2 | 4 | 8 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| C | 168 s | 87 s (1.9×) | 47 s (3.6×) | 29 s (5.9×) | 13.2 s | 5.4 s (2.4×) | 2.8 s (4.7×) | 4.1 s (3.2×)* |
+| C++ | 169 s | 88 s (1.9×) | 48 s (3.5×) | 31 s (5.5×) | 13.6 s | 5.0 s (2.7×) | 3.1 s (4.4×) | 4.2 s (3.2×)* |
+| Rust | 119 s | 59 s (2.0×) | 32 s (3.7×) | 19 s (6.1×) | 14.3 s | 4.9 s (2.9×) | 2.6 s (5.5×) | 2.6 s (5.6×) |
+| Python | 189 s | 109 s (1.7×) | 66 s (2.9×) | 40 s (4.7×) | 16.9 s | 6.9 s (2.4×) | 5.4 s (3.1×) | 5.2 s (3.2×) |
+
+\* Not reproducible; see the protein observations below.
+
+Observations:
+
+- **DNA scales close to linearly up to 8 threads.** Parallel efficiency at 8
+  threads was 76% (Rust), 73% (C), 69% (C++) and 59% (Python) on human chr1–4.
+  A. thaliana gave the same picture. That leaves about 30 s instead of 170 s
+  for 880 Mbp in C, and about 20 s in Rust.
+- **Protein levels off after 4 threads, because the main thread becomes the
+  limit.**
+  - Parsing, normalising and hashing hundreds of thousands of short records
+    stays serial. For C, total CPU time at 4 threads (12.7 s) equals the
+    single-threaded run, but wall time is 2.8 s, so the serial part is about
+    2.8 s.
+  - Speedups at 2 threads exceed 2× because the main thread's own work now
+    overlaps with compression: N workers plus the main thread are N + 1 busy
+    threads.
+- **The C and C++ protein slowdown at 8 threads (\*) is node variation, not
+  an effect of the code.**
+  - Those runs varied from 3.8 to 6.0 s.
+  - Repeating 4, 8 and 16 threads alternately on a single node gave the same
+    time at all three counts: about 3.0 s for C, 3.3 s for C++ and 2.8–3.8 s
+    for Rust.
+- **Memory is essentially unchanged.** The parallel writer holds 2N blocks of
+  128 KiB in flight.
+- **Compressed size.**
+  - C, C++ and Python prime each block with the previous 32 KiB, so their
+    output is 0.1% larger than single-threaded.
+  - Rust's flate2 backend (miniz_oxide) cannot set a preset dictionary, so its
+    blocks are independent: 0.7% larger for DNA and 3.3% larger for protein.
+- **Single-threaded Rust is faster on protein in 0.2.** A buffer in front of
+  flate2's encoder avoids zero-filling its output buffer on every 80-byte write
+  (rust-lang/flate2-rs#395). Rust's single-threaded protein time fell from
+  15.1 s (version 0.1, above) to 14.3 s here. DNA is unchanged within
+  node-to-node variation (114 s above, 119 s here).
