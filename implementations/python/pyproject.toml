@@ -7,7 +7,7 @@ name = "hashfasta"
 dynamic = ["version"]
 description = "Convert FASTA to HashFASTA: records keyed by the SHA-256 of their normalized sequence, gzip output"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{name = "Rob Edwards", email = "robert.edwards@flinders.edu.au"}]
@@ -17,6 +17,7 @@ classifiers = [
     "Intended Audience :: Science/Research",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Topic :: Scientific/Engineering :: Bio-Informatics",
 ]
 dependencies = []
