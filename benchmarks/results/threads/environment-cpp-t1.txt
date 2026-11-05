@@ -1,0 +1,6 @@
+impl=cpp threads=1
+commit=d792e0390cbd5473159584e57a760be96dde527e
+job=52228384 node=nid002024 partition=work
+allocation=cpus-per-task=2 mem-per-cpu=1840 MiB
+cpu=AMD EPYC 7763 64-Core Processor
+storage=node-local overlay

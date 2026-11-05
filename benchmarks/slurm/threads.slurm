@@ -5,9 +5,10 @@
 #SBATCH --mem-per-cpu=1840M
 #SBATCH --time=01:30:00
 # Time one implementation (array index 0-3) with --threads $THREADS on the
-# inputs listed in THREAD_LABELS. Submit with --cpus-per-task=$((2 * THREADS)),
-# i.e. THREADS whole cores (Setonix counts both hardware threads of a core),
-# so every thread count gets the same cores and memory per thread. Submitted
+# inputs listed in THREAD_LABELS. Submit with --cpus-per-task=$((2 * THREADS));
+# on Setonix's work partition that allocated 4 x THREADS hardware threads
+# (2 x THREADS cores) and 1840 MB per requested CPU, so every thread count
+# gets the same cores and memory per compression thread. Submitted
 # by run_threads.sh, which sets BENCH, REPO, PYTHON and THREADS.
 set -euo pipefail
 IMPLS=(c cpp rust python)
