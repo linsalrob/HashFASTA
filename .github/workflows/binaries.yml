@@ -83,7 +83,7 @@ jobs:
           file bin/*
           if [ "$RUNNER_OS" = Linux ]; then
             for b in bin/*; do
-              if ldd "$b"; then echo "$b is not static"; exit 1; fi
+              file -b "$b" | grep -Eq 'statically linked|static-pie linked' || { echo "$b is not static"; exit 1; }
             done
           else
             otool -L bin/*
