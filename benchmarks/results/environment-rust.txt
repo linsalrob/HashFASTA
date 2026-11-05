@@ -1,0 +1,9 @@
+impl=rust
+command=hashfasta
+commit=5e4b4ac21a46ccd9e055fc0aa24df98dffd79ddc
+job=52210266 node=nid002816 partition=work
+allocation=cpus-per-task=14 mem=24576 MiB
+cpu=AMD EPYC 7763 64-Core Processor
+os=SUSE Linux Enterprise Server 15 SP7 kernel=6.4.0-150700.53.87-default
+storage=node-local overlay
+version=rustc 1.96.0 (ac68faa20 2026-05-25)

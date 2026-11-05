@@ -1,0 +1,107 @@
+[
+  {
+    "label": "dna-1-crassphage",
+    "panel": "dna",
+    "description": "crAssphage genome JQ995537.1 (repository fixture)",
+    "sources": [
+      "<path to JQ995537.nucleotide.input.fasta.gz>"
+    ]
+  },
+  {
+    "label": "dna-2-ecoli",
+    "panel": "dna",
+    "description": "Escherichia coli K-12 W3110 complete genome (AC_000091)",
+    "sources": [
+      "<path to 637000110.fna>"
+    ]
+  },
+  {
+    "label": "dna-3-bacterial-set",
+    "panel": "dna",
+    "description": "8 bacterial genomes: E. coli W3110, Acinetobacter baumannii AB5075 and 6 Pseudomonas isolate draft assemblies",
+    "sources": [
+      "<path to 637000110.fna>",
+      "<path to AB5075_parent.fna>",
+      "<Pseudomonas isolate assembly .fna>",
+      "<Pseudomonas isolate assembly .fna>",
+      "<Pseudomonas isolate assembly .fna>",
+      "<Pseudomonas isolate assembly .fna>",
+      "<Pseudomonas isolate assembly .fna>",
+      "<Pseudomonas isolate assembly .fna>"
+    ]
+  },
+  {
+    "label": "dna-4-arabidopsis",
+    "panel": "dna",
+    "description": "Arabidopsis thaliana TAIR10.1 genome (GCF_000001735.4)",
+    "sources": [
+      "<path to GCF_000001735.4_TAIR10.1_genomic.fna>"
+    ]
+  },
+  {
+    "label": "dna-5-human-chr1-4",
+    "panel": "dna",
+    "description": "Human GRCh38 primary assembly, first records (chr1-chr4) up to 800 Mbp",
+    "sources": [
+      "<path to GRCh38.primary_assembly.genome.fa>"
+    ],
+    "max_residues": 800000000
+  },
+  {
+    "label": "dna-6-human",
+    "panel": "dna",
+    "description": "Human GRCh38 primary assembly, complete (194 records)",
+    "sources": [
+      "<path to GRCh38.primary_assembly.genome.fa>"
+    ]
+  },
+  {
+    "label": "protein-1-crassphage",
+    "panel": "protein",
+    "description": "80 crAssphage JQ995537.1 CDS translations (repository fixture)",
+    "sources": [
+      "<path to JQ995537.proteins.input.fasta.gz>"
+    ]
+  },
+  {
+    "label": "protein-2-pao1",
+    "panel": "protein",
+    "description": "Pseudomonas aeruginosa PAO1 reference proteome",
+    "sources": [
+      "<path to PAO1_protein.faa>"
+    ]
+  },
+  {
+    "label": "protein-3-amrfinder",
+    "panel": "protein",
+    "description": "NCBI AMRFinderPlus reference proteins (database 2026-05-15.1)",
+    "sources": [
+      "<path to AMRProt.fa>"
+    ]
+  },
+  {
+    "label": "protein-4-arabidopsis",
+    "panel": "protein",
+    "description": "Arabidopsis thaliana TAIR10.1 proteome (GCF_000001735.4)",
+    "sources": [
+      "<path to GCF_000001735.4_TAIR10.1_protein.faa>"
+    ]
+  },
+  {
+    "label": "protein-5-busco-vertebrata-subset",
+    "panel": "protein",
+    "description": "BUSCO vertebrata_odb10 RefSeq proteins, first records up to 75 M residues",
+    "sources": [
+      "<path to refseq_db.faa>"
+    ],
+    "max_residues": 75000000
+  },
+  {
+    "label": "protein-6-busco-vertebrata",
+    "panel": "protein",
+    "description": "BUSCO vertebrata_odb10 RefSeq proteins, complete",
+    "sources": [
+      "<path to refseq_db.faa>"
+    ]
+  }
+]
