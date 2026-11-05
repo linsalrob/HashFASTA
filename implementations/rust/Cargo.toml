@@ -1,0 +1,17 @@
+[package]
+name = "hashfasta"
+version = "0.1.0"
+edition = "2021"
+description = "HashFASTA v0.1 converter: sequence-derived SHA-256 FASTA IDs, gzip output"
+license-file = "../../LICENSE"
+publish = false
+
+[dependencies]
+bzip2 = "0.6"
+flate2 = "1"
+# Bundled liblzma built from source; no bindgen, so no libclang needed.
+liblzma = { version = "0.4", default-features = false, features = ["static"] }
+sha2 = "0.10"
+
+[profile.release]
+lto = true
