@@ -168,7 +168,7 @@ static void destroy(pgzip *p) {
     pthread_cond_broadcast(&p->work);
     pthread_mutex_unlock(&p->lock);
     for (i = 0; i < p->started; i++) pthread_join(p->tids[i], NULL);
-    for (i = 0; i < p->nslots; i++) {
+    for (i = 0; p->slots && i < p->nslots; i++) { /* slots is NULL if its allocation failed */
         free(p->slots[i].in);
         free(p->slots[i].out);
     }
