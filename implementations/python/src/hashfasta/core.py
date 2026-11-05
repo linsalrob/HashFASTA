@@ -397,7 +397,11 @@ class _ParallelGzipWriter(object):
             self._write_next()
         self._crc = zlib.crc32(block, self._crc)
         self._size += len(block)
-        self._pending.append(self._pool.submit(_deflate_block, block, self._tail, last, self._level))
+        try:
+            future = self._pool.submit(_deflate_block, block, self._tail, last, self._level)
+        except RuntimeError as e:  # "can't start new thread"
+            raise OSError("cannot start compression threads: %s" % e)
+        self._pending.append(future)
         self._tail = (self._tail + block)[-_WINDOW:]
 
     def _write_next(self):

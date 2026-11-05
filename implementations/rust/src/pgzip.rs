@@ -48,12 +48,15 @@ impl<W: Write> ParallelGz<W> {
         inner.write_all(&[0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3])?;
         let (tx, rx) = mpsc::channel::<Job>();
         let rx = Arc::new(Mutex::new(rx));
+        // Builder::spawn reports failure as an error (spawn would panic); on
+        // failure, workers already started exit once `tx` is dropped.
         let workers = (0..threads)
             .map(|_| {
                 let rx = Arc::clone(&rx);
-                std::thread::spawn(move || worker(&rx, level))
+                std::thread::Builder::new().spawn(move || worker(&rx, level))
             })
-            .collect();
+            .collect::<io::Result<Vec<_>>>()
+            .map_err(|e| io::Error::other(format!("cannot start compression threads: {e}")))?;
         Ok(Self {
             inner: Some(inner),
             cur: Vec::with_capacity(BLOCK),

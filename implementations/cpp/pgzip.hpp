@@ -18,6 +18,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <thread>
 #include <vector>
 
@@ -31,7 +32,14 @@ public:
         // gzip header: deflate, no flags, mtime 0, no extra flags, OS = Unix
         static const unsigned char header[10] = {0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, 3};
         write_all(header, sizeof header);
-        for (int i = 0; i < threads; i++) workers_.emplace_back([this] { work(); });
+        try {
+            for (int i = 0; i < threads; i++) workers_.emplace_back([this] { work(); });
+        } catch (const std::system_error &e) {
+            // Join the workers already started: destroying a joinable
+            // std::thread would call std::terminate and skip cleanup.
+            stop();
+            throw std::runtime_error(std::string("cannot start compression threads: ") + e.what());
+        }
     }
     ParallelGzip(const ParallelGzip &) = delete;
     ParallelGzip &operator=(const ParallelGzip &) = delete;
