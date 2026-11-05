@@ -71,7 +71,7 @@ The Python package is also a library (`hashfasta.convert`, `read_fasta`, `read_h
 | Language | Requirements | Build |
 | --- | --- | --- |
 | Python | Python ≥ 3.6 from a checkout; ≥ 3.9 to `pip install` | none, or `pip install implementations/python` |
-| Perl | Perl 5 core modules (`IO::Compress::Gzip`, `IO::Uncompress::Gunzip`, `IO::Uncompress::Bunzip2`, `Digest::SHA`); for xz, `IO::Uncompress::UnXz` (CPAN `IO-Compress-Lzma`, Debian `libio-compress-lzma-perl`) or else the `xz` command | none |
+| Perl | Perl 5 core modules (`IO::Compress::Gzip`, `IO::Uncompress::Gunzip`, `IO::Uncompress::Bunzip2`, `Digest::SHA`); the `xz` command for xz input | none |
 | Rust | cargo (crates `flate2`, `bzip2`, `liblzma`, `sha2`) and a C compiler for the bundled liblzma | `cargo build --release --manifest-path implementations/rust/Cargo.toml` |
 | C | C99 compiler, zlib, libbz2 and liblzma headers | `make -C implementations/c` |
 | C++ | C++17 compiler, zlib, libbz2 and liblzma headers | `make -C implementations/cpp` |

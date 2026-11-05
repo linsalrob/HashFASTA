@@ -12,7 +12,7 @@ jobs:
       - name: Install compression libraries and the Perl xz module
         run: |
           sudo apt-get update
-          sudo apt-get install -y zlib1g-dev libbz2-dev liblzma-dev libio-compress-lzma-perl
+          sudo apt-get install -y zlib1g-dev libbz2-dev liblzma-dev xz-utils
       - name: Rust formatting and lints
         working-directory: implementations/rust
         run: |

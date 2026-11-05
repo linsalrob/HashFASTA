@@ -399,16 +399,13 @@ def convert(input_path, output_path=None):
     try:
         inp = open_input(raw)
         if output_path == "-":
-            gz = _gzip_writer(sys.stdout.buffer)
-            convert_stream(inp, gz)
-            gz.close()
+            with _gzip_writer(sys.stdout.buffer) as gz:
+                convert_stream(inp, gz)
             sys.stdout.buffer.flush()
         else:
             tmp_path, fd = _create_temp(output_path)
-            with os.fdopen(fd, "wb") as fh:
-                gz = _gzip_writer(fh)
+            with os.fdopen(fd, "wb") as fh, _gzip_writer(fh) as gz:
                 convert_stream(inp, gz)
-                gz.close()
             os.replace(tmp_path, output_path)
             tmp_path = None
     except OSError as e:

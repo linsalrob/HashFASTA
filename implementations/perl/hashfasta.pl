@@ -5,9 +5,9 @@
 #
 # Input format is detected from its magic bytes. Core modules handle gzip
 # (IO::Uncompress::Gunzip), bzip2 (IO::Uncompress::Bunzip2) and plain text;
-# all read concatenated members/streams. xz uses IO::Uncompress::UnXz when it
-# is installed (CPAN IO-Compress-Lzma, Debian libio-compress-lzma-perl), and
-# otherwise streams through the system `xz -dc` command.
+# all read concatenated members/streams. xz streams through the system
+# `xz -dc` command (xz-utils): CPAN's IO::Uncompress::UnXz rejects valid xz
+# stream padding, so it is not used.
 # Output uses IO::Compress::Gzip and Digest::SHA.
 
 use strict;
@@ -122,8 +122,8 @@ sub module_reader {
     };
 }
 
-# xz without IO::Uncompress::UnXz: a child process feeds the already-read
-# leading bytes and the rest of the input to `xz -dc`, whose output we read.
+# xz: a child process feeds the already-read leading bytes and the rest of
+# the input to `xz -dc`, whose output we read.
 sub xz_pipe_reader {
     my ($fh, $head) = @_;
     my $pid = open(my $pipe, '-|');
@@ -144,7 +144,7 @@ sub xz_pipe_reader {
         getline => sub { scalar <$pipe> },
         finish  => sub {
             close $pipe
-                or fail("xz decompression failed (needs IO::Uncompress::UnXz or the xz command)");
+                or fail("xz decompression failed (corrupt input, or no xz command)");
         },
     };
 }
@@ -173,12 +173,6 @@ sub open_input {
         return module_reader($z, \$Bunzip2Error);
     }
     if ($head eq "\xfd7zXZ\x00") {
-        if (eval { require IO::Uncompress::UnXz; 1 }) {
-            no strict 'refs';
-            my $z = IO::Uncompress::UnXz->new($fh, Prime => $head, MultiStream => 1, Transparent => 0)
-                or fail("cannot read input $path: ${'IO::Uncompress::UnXz::UnXzError'}");
-            return module_reader($z, \${'IO::Uncompress::UnXz::UnXzError'});
-        }
         return xz_pipe_reader($fh, $head);
     }
     # gzip, or plain text passed through (Transparent) when there is no gzip
