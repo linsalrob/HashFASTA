@@ -118,7 +118,7 @@ private:
             std::unique_lock<std::mutex> lock(mutex_);
             done_.wait(lock, [&] { return s.state == State::Done; });
         }
-        if (s.failed) throw std::runtime_error("write failed: zlib compression error");
+        if (s.failed) throw std::runtime_error("write failed: compression failed (out of memory or zlib error)");
         write_all(s.out.data(), s.out.size());
         crc_ = crc32_combine(crc_, s.crc, static_cast<z_off_t>(s.in.size()));
         total_ += s.in.size();
@@ -135,7 +135,11 @@ private:
             if (stopping_) break;
             Slot &s = slots_[taken_++ % slots_.size()];
             lock.unlock();
-            s.failed = !ok || !compress(z, s);
+            try {
+                s.failed = !ok || !compress(z, s);
+            } catch (...) {  // e.g. std::bad_alloc: an escaping exception would terminate
+                s.failed = true;
+            }
             lock.lock();
             s.state = State::Done;
             done_.notify_all();
