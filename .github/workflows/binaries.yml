@@ -1,0 +1,132 @@
+name: binaries
+
+# Build the C, C++ and Rust command-line tools for Linux (x86_64, aarch64) and
+# macOS (arm64), test them, and attach them to the GitHub release. Runs when a
+# release is published, or by hand for an existing release tag. Pull requests
+# that change this workflow build and test without uploading.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to build and attach binaries to (e.g. python-v0.2.1)
+        required: true
+  pull_request:
+    paths: [".github/workflows/binaries.yml"]
+
+env:
+  TAG: ${{ github.event.release.tag_name || inputs.tag }}
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            platform: linux-x86_64
+            rust_target: x86_64-unknown-linux-musl
+          - os: ubuntu-24.04-arm
+            platform: linux-aarch64
+            rust_target: aarch64-unknown-linux-musl
+          - os: macos-14
+            platform: macos-arm64
+            rust_target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG || github.ref }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # Linux: static executables (glibc for C/C++, musl for Rust) so they run
+      # on any distribution without the compression libraries installed.
+      - name: Build (Linux, static)
+        if: runner.os == 'Linux'
+        env:
+          CC_x86_64_unknown_linux_musl: musl-gcc
+          CC_aarch64_unknown_linux_musl: musl-gcc
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zlib1g-dev libbz2-dev liblzma-dev musl-tools
+          make -C implementations/c LDFLAGS=-static
+          make -C implementations/cpp LDFLAGS=-static
+          rustup target add ${{ matrix.rust_target }}
+          cargo build --release --locked --target ${{ matrix.rust_target }} \
+            --manifest-path implementations/rust/Cargo.toml
+
+      # macOS: zlib and libbz2 come with the system; link Homebrew's liblzma
+      # statically because it is not part of macOS.
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew list xz >/dev/null 2>&1 || brew install xz
+          xz=$(brew --prefix xz)
+          test -f "$xz/lib/liblzma.a"
+          libs="-lz -lbz2 $xz/lib/liblzma.a -lpthread"
+          make -C implementations/c CPPFLAGS="-D_POSIX_C_SOURCE=200809L -I$xz/include" LDLIBS="$libs"
+          make -C implementations/cpp CPPFLAGS="-I$xz/include" LDLIBS="$libs"
+          rustup target add ${{ matrix.rust_target }}
+          cargo build --release --locked --target ${{ matrix.rust_target }} \
+            --manifest-path implementations/rust/Cargo.toml
+
+      - name: Collect binaries
+        run: |
+          mkdir -p bin
+          cp implementations/c/hashfasta bin/hashfasta-c
+          cp implementations/cpp/hashfasta bin/hashfasta-cpp
+          cp implementations/rust/target/${{ matrix.rust_target }}/release/hashfasta bin/hashfasta-rust
+          strip bin/*
+          file bin/*
+          if [ "$RUNNER_OS" = Linux ]; then
+            for b in bin/*; do
+              if ldd "$b"; then echo "$b is not static"; exit 1; fi
+            done
+          else
+            otool -L bin/*
+            if otool -L bin/* | grep -q /opt/homebrew; then echo "links Homebrew libraries"; exit 1; fi
+          fi
+
+      - name: Conformance tests
+        run: |
+          for impl in c cpp rust; do
+            python tests/run_conformance.py --cmd "$PWD/bin/hashfasta-$impl"
+            python tests/run_conformance.py --threads 4 --cmd "$PWD/bin/hashfasta-$impl"
+          done
+
+      - name: Package
+        run: |
+          version=${TAG#python-v}
+          name=hashfasta-${version:-dev}-${{ matrix.platform }}
+          mkdir "$name"
+          cp bin/* LICENSE README.md "$name/"
+          tar -czf "$name.tar.gz" "$name"
+          echo "ASSET=$name.tar.gz" >> "$GITHUB_ENV"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.platform }}
+          path: ${{ env.ASSET }}
+
+  upload:
+    if: github.event_name != 'pull_request'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: binaries-*
+          merge-multiple: true
+          path: dist
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd dist
+          sha256sum *.tar.gz > SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$TAG" *.tar.gz SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"

@@ -14,6 +14,6 @@ Every substantive change (new behaviour, a bug fix, a CLI or spec change, or a d
 
 1. In the same pull request, bump `__version__` in `implementations/python/src/hashfasta/__init__.py` (semantic versioning; pre-1.0, a minor bump for spec or CLI changes and a patch bump otherwise). The Rust crate version in `implementations/rust/Cargo.toml` follows the same number.
 2. After the pull request is merged and CI on `main` is green, tag the merge commit `python-vX.Y.Z` (matching `__version__`) and push the tag. The `python-package` workflow then builds, tests and publishes to PyPI through trusted publishing (environment `pypi`); its publish job fails if the tag and `__version__` disagree.
-3. Once the workflow has published, create the GitHub release for that tag (`gh release create python-vX.Y.Z --title "hashfasta X.Y.Z" --notes ...`) summarising the changes, and check that `pip install hashfasta==X.Y.Z` works.
+3. Once the workflow has published, create the GitHub release for that tag (`gh release create python-vX.Y.Z --title "hashfasta X.Y.Z" --notes ...`) summarising the changes, and check that `pip install hashfasta==X.Y.Z` works. Publishing the release starts the `binaries` workflow, which builds, tests and attaches the C, C++ and Rust binaries for Linux and macOS; check that it succeeded. To rebuild them for an existing release, run that workflow by hand with the tag.
 
 A published PyPI version cannot be replaced; fix mistakes with a new version.

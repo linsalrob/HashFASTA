@@ -45,7 +45,7 @@ python3 implementations/python/run_hashfasta.py sample.fasta.gz
 # Perl 5 (core modules only)
 perl implementations/perl/hashfasta.pl sample.fasta.gz
 
-# Compiled versions (build first; see below)
+# Compiled versions: download a prebuilt binary (see below) or build first
 implementations/rust/target/release/hashfasta sample.fasta.gz
 implementations/c/hashfasta sample.fasta.gz
 implementations/cpp/hashfasta sample.fasta.gz
@@ -90,6 +90,18 @@ The first token is the record identity. Identical sequences have identical keys;
 - Invalid input and I/O errors exit non-zero. Invalid input includes empty records, sequence text before the first header, non-ASCII or non-printable sequence bytes, empty files, and corrupt or truncated compressed streams.
 
 See the [specification](spec/HASHFASTA-v0.1.md) for the complete normalization and escaping rules.
+
+## Prebuilt binaries
+
+Each [GitHub release](https://github.com/linsalrob/HashFASTA/releases) carries the C, C++ and Rust tools for Linux x86_64, Linux aarch64 and macOS arm64 (`hashfasta-X.Y.Z-<platform>.tar.gz`, with `SHA256SUMS`). Each archive holds `hashfasta-c`, `hashfasta-cpp` and `hashfasta-rust`, which behave identically. The Linux binaries are statically linked and need no libraries installed; the macOS ones use only system libraries.
+
+```sh
+curl -LO https://github.com/linsalrob/HashFASTA/releases/download/python-vX.Y.Z/hashfasta-X.Y.Z-linux-x86_64.tar.gz
+tar -xzf hashfasta-X.Y.Z-linux-x86_64.tar.gz
+hashfasta-X.Y.Z-linux-x86_64/hashfasta-rust sample.fasta.gz
+```
+
+On macOS, files downloaded with a browser are quarantined; clear that with `xattr -d com.apple.quarantine hashfasta-*`.
 
 ## Build
 
