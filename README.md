@@ -21,7 +21,7 @@ Yes!
 
 ## Should I delete the original file after using `HashFASTA`? 
 
-You can, its up to you. You can always go back from the `.hash.fasta` file to the original, but wex don't (yet) provide code to do that. (Hint: post an issue if you really need/want it).
+You can; it's up to you. The transformation isn't exactly lossless - we convert the sequences to uppercase for the hash, but with that caveat you can always go back from the `.hash.fasta` file to the original, but we don't (yet) provide code to do that. (Hint: post an issue if you really need/want it).
 
 ## How do I use HashFASTA to convert a FASTA file
 
