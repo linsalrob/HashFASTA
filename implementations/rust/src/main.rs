@@ -206,6 +206,17 @@ fn gz_writer<W: Write>(w: W) -> GzEncoder<W> {
     GzBuilder::new().mtime(0).write(w, Compression::default())
 }
 
+/// Convert through a buffer in front of the encoder, so it compresses large
+/// chunks rather than one 80-byte line at a time: since flate2 1.0.28 every
+/// write zero-fills the encoder's spare output buffer, which costs up to a
+/// fifth of the run time with small writes (rust-lang/flate2-rs#395).
+fn convert_buffered<R: BufRead + ?Sized, W: Write>(inp: &mut R, gz: W) -> Result<W> {
+    let mut buf = BufWriter::with_capacity(1 << 17, gz);
+    convert(inp, &mut buf)?;
+    buf.into_inner()
+        .map_err(|e| format!("I/O error: {}", e.error()))
+}
+
 fn run(input: &str, output: Option<&str>) -> Result<()> {
     let output = match output {
         Some(o) => o.to_string(),
@@ -225,8 +236,7 @@ fn run(input: &str, output: Option<&str>) -> Result<()> {
 
     if output == "-" {
         let stdout = io::stdout();
-        let mut gz = gz_writer(BufWriter::new(stdout.lock()));
-        convert(&mut inp, &mut gz)?;
+        let gz = convert_buffered(&mut inp, gz_writer(BufWriter::new(stdout.lock())))?;
         gz.finish()
             .and_then(|mut w| w.flush())
             .map_err(|e| format!("I/O error: {e}"))?;
@@ -236,8 +246,7 @@ fn run(input: &str, output: Option<&str>) -> Result<()> {
     // Write a temporary sibling, renamed into place only on success.
     let (tmp, fh) = create_temp(&output)?;
     let result = (|| -> Result<()> {
-        let mut gz = gz_writer(BufWriter::new(fh));
-        convert(&mut inp, &mut gz)?;
+        let gz = convert_buffered(&mut inp, gz_writer(BufWriter::new(fh)))?;
         let w = gz.finish().map_err(|e| format!("I/O error: {e}"))?;
         let fh = w.into_inner().map_err(|e| format!("I/O error: {e}"))?;
         fh.sync_all().map_err(|e| format!("I/O error: {e}"))?;
