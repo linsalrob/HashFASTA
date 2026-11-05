@@ -181,9 +181,12 @@ sub open_input {
         }
         return xz_pipe_reader($fh, $head);
     }
-    # gzip, or plain text passed through (Transparent) when there is no gzip magic.
-    my $z = IO::Uncompress::Gunzip->new($fh, Prime => $head, MultiStream => 1, Transparent => 1,
-                                        Strict => 1)
+    # gzip, or plain text passed through (Transparent) when there is no gzip
+    # magic. Transparent must be off for gzip, or junk after the last member
+    # would be passed through as if it were plain text.
+    my $is_gzip = substr($head, 0, 2) eq "\x1f\x8b";
+    my $z = IO::Uncompress::Gunzip->new($fh, Prime => $head, MultiStream => 1,
+                                        Transparent => $is_gzip ? 0 : 1, Strict => 1)
         or fail("cannot read input $path: $GunzipError");
     return module_reader($z, \$GunzipError);
 }

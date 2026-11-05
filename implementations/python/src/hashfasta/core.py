@@ -134,6 +134,73 @@ class _Prefixed(io.RawIOBase):
         return len(data)
 
 
+_CHUNK = 1 << 16
+_ZLIB = type(zlib.decompressobj())
+
+
+class _Decompressed(io.RawIOBase):
+    """Concatenated gzip, bzip2 or xz streams decoded as one input.
+
+    After each complete stream the input must end or start another stream of
+    the same format; anything else (a corrupt stream, trailing junk or zero
+    bytes) is an error. xz also allows its own stream padding: NUL bytes in
+    multiples of four. The standard library's file wrappers silently stop at
+    a corrupt trailing bzip2 or xz stream, so they are not used here.
+    """
+
+    def __init__(self, raw, new_decoder, name, xz_padding=False):
+        self._raw = raw
+        self._new = new_decoder
+        self._name = name
+        self._xz_padding = xz_padding
+        self._dec = None
+        self._buf = b""  # input not yet given to a decoder
+        self._nul = 0
+
+    def readable(self):
+        return True
+
+    def _next_stream(self):
+        """Start the next stream; return False at a clean end of input."""
+        while True:
+            if not self._buf:
+                self._buf = self._raw.read(_CHUNK)
+                if not self._buf:
+                    if self._nul % 4:
+                        raise HashFastaError("invalid xz stream padding")
+                    return False
+            if self._xz_padding:
+                stripped = self._buf.lstrip(b"\0")
+                self._nul += len(self._buf) - len(stripped)
+                self._buf = stripped
+                if not stripped:
+                    continue
+                if self._nul % 4:
+                    raise HashFastaError("invalid xz stream padding")
+                self._nul = 0
+            self._dec = self._new()
+            return True
+
+    def readinto(self, b):
+        while True:
+            if self._dec is None and not self._next_stream():
+                return 0
+            dec = self._dec
+            zlib_dec = isinstance(dec, _ZLIB)
+            if not self._buf and (zlib_dec or dec.needs_input):
+                self._buf = self._raw.read(_CHUNK)
+                if not self._buf:
+                    raise HashFastaError("%s input is truncated" % self._name)
+            out = dec.decompress(self._buf, len(b))
+            self._buf = dec.unconsumed_tail if zlib_dec else b""
+            if dec.eof:
+                self._buf = dec.unused_data
+                self._dec = None
+            if out:
+                b[:len(out)] = out
+                return len(out)
+
+
 def open_input(raw):
     """Wrap a binary stream, decompressing gzip, bzip2 or xz detected by magic bytes."""
     head = b""
@@ -145,15 +212,15 @@ def open_input(raw):
     for magic, name in UNSUPPORTED_MAGIC:
         if head.startswith(magic):
             raise HashFastaError("%s-compressed input is not supported; decompress it first" % name)
-    stream = io.BufferedReader(_Prefixed(head, raw), 1 << 16)
-    # All three decoders read concatenated members/streams as one input.
+    stream = _Prefixed(head, raw)
     if head.startswith(GZIP_MAGIC):
-        return gzip.GzipFile(fileobj=stream, mode="rb")
-    if head.startswith(BZIP2_MAGIC):
-        return bz2.BZ2File(stream, mode="rb")
-    if head.startswith(XZ_MAGIC):
-        return lzma.LZMAFile(stream, mode="rb")
-    return stream
+        stream = _Decompressed(stream, lambda: zlib.decompressobj(16 + zlib.MAX_WBITS), "gzip")
+    elif head.startswith(BZIP2_MAGIC):
+        stream = _Decompressed(stream, bz2.BZ2Decompressor, "bzip2")
+    elif head.startswith(XZ_MAGIC):
+        stream = _Decompressed(stream, lambda: lzma.LZMADecompressor(lzma.FORMAT_XZ), "xz",
+                               xz_padding=True)
+    return io.BufferedReader(stream, _CHUNK)
 
 
 def _parse(inp):

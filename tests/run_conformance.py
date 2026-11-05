@@ -72,6 +72,11 @@ def invalid_fixtures():
     return found
 
 
+def hash_record(header, seq):
+    """HashFASTA text for a short record (no escaping or wrapping needed)."""
+    return b">sha256_" + hashlib.sha256(seq).hexdigest().encode() + b" [" + header + b"]\n" + seq + b"\n"
+
+
 def default_name(name):
     """Spec section 5 default output name (independent of any implementation)."""
     for s in COMPRESSION_SUFFIXES:
@@ -269,6 +274,31 @@ class Runner(object):
             src = self.write("truncated." + fmt, good[: len(good) // 2])
             self.expect_failure("truncated %s" % fmt, src)
 
+        # After the last complete stream only another valid stream of the same
+        # format may follow (plus xz stream padding: NUL bytes in fours).
+        first, second = b">a\nACGT\n", b">b\nGGGG\n"
+        for fmt, comp in (("gzip", gzip.compress), ("bzip2", bz2.compress), ("xz", lzma.compress)):
+            s1, s2 = comp(first), comp(second)
+            bad = [("corrupt second stream", s1 + bytes([s2[0] ^ 0xFF]) + s2[1:]),
+                   ("corrupt second stream header", s1 + s2[:3] + bytes([s2[3] ^ 0xFF]) + s2[4:]),
+                   ("trailing junk", s1 + b"garbage"),
+                   ("truncated second stream", s1 + s2[: len(s2) // 2])]
+            if fmt == "xz":
+                bad += [("padding not a multiple of 4", s1 + b"\0" * 3),
+                        ("padding of 5 between streams", s1 + b"\0" * 5 + s2)]
+            else:
+                bad += [("trailing zero bytes", s1 + b"\0" * 16)]
+            for label, blob in bad:
+                src = self.write("trailing.%s" % fmt, blob)
+                self.expect_failure("%s %s" % (fmt, label), src)
+            if fmt == "xz":
+                both = hash_record(b"a", b"ACGT") + hash_record(b"b", b"GGGG")
+                for label, blob, expected in (
+                        ("padding of 16 at end", s1 + b"\0" * 16, hash_record(b"a", b"ACGT")),
+                        ("padding of 4 between streams", s1 + b"\0" * 4 + s2, both)):
+                    self.convert_file("xz %s" % label, self.write("padded.xz", blob), expected,
+                                      self.path("padded.hash.fasta.gz"))
+
         # Output path equal to the input must be refused, and the input kept.
         src = self.write("same.fasta", b">a\nACGT\n")
         before = sha256_file(src)
@@ -289,9 +319,7 @@ class Runner(object):
         self.check("planted temp links [input unchanged]", sha256_file(src) == before)
         if os.path.exists(out):
             with open(out, "rb") as fh:
-                self.check_gzip_output("planted temp links", fh.read(),
-                                       b">sha256_" + hashlib.sha256(b"ACGT").hexdigest().encode()
-                                       + b" [a]\nACGT\n")
+                self.check_gzip_output("planted temp links", fh.read(), hash_record(b"a", b"ACGT"))
         else:
             self.check("planted temp links", False, "no output written")
         for f in os.listdir(self.tmp):

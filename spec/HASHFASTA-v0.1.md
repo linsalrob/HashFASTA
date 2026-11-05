@@ -23,7 +23,7 @@ Implementations **MUST** read uncompressed FASTA and FASTA compressed with gzip 
 | xz | `FD 37 7A 58 5A 00` |
 | anything else | read as uncompressed FASTA |
 
-Concatenated gzip members, bzip2 streams and xz streams **MUST** be read as one continuous input. Input beginning with the signature of an unsupported compression format, zstd (`28 B5 2F FD`) or ZIP (`50 4B 03 04`), **MUST** be rejected with an error naming that format; it must not be parsed as FASTA. A truncated or corrupt compressed stream is an error.
+Concatenated gzip members, bzip2 streams and xz streams **MUST** be read as one continuous input. Input beginning with the signature of an unsupported compression format, zstd (`28 B5 2F FD`) or ZIP (`50 4B 03 04`), **MUST** be rejected with an error naming that format; it must not be parsed as FASTA. A truncated or corrupt compressed stream is an error. After each complete stream, the input **MUST** either end or begin another valid stream of the same format; a corrupt following stream, trailing junk or trailing zero bytes are errors and must not be silently ignored. The only exception is xz stream padding (NUL bytes in multiples of four), which the xz format itself allows between and after streams.
 
 Gzip is chosen because it is streamable, available in the standard or widely used libraries of the target languages, and accepted by many downstream sequence tools. HashFASTA does not define a new compression codec. Output is one valid gzip stream; compressed bytes need not be identical between implementations.
 
