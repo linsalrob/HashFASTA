@@ -1,0 +1,13 @@
+label,panel,description,records,residues,uncompressed_bytes,gzip_bytes
+dna-1-crassphage,dna,crAssphage genome JQ995537.1 (repository fixture),1,97065,98336,28705
+dna-2-ecoli,dna,Escherichia coli K-12 W3110 complete genome (AC_000091),1,4646332,4723828,1444236
+dna-3-bacterial-set,dna,"8 bacterial genomes: E. coli W3110, Acinetobacter baumannii AB5075 and 6 Pseudomonas isolate draft assemblies",11,46340548,47113596,14059987
+dna-4-arabidopsis,dna,Arabidopsis thaliana TAIR10.1 genome (GCF_000001735.4),7,119668634,121164916,38706158
+dna-5-human-chr1-4,dna,"Human GRCh38 primary assembly, first records (chr1-chr4) up to 800 Mbp",4,879660065,894321099,259354338
+dna-6-human,dna,"Human GRCh38 primary assembly, complete (194 records)",194,3099750718,3151417447,882414728
+protein-1-crassphage,protein,80 crAssphage JQ995537.1 CDS translations (repository fixture),80,29522,38338,20178
+protein-2-pao1,protein,Pseudomonas aeruginosa PAO1 reference proteome,5572,1858983,2288422,1192511
+protein-3-amrfinder,protein,NCBI AMRFinderPlus reference proteins (database 2026-05-15.1),9998,3412877,4658980,1192975
+protein-4-arabidopsis,protein,Arabidopsis thaliana TAIR10.1 proteome (GCF_000001735.4),48265,20843494,24797081,11862551
+protein-5-busco-vertebrata-subset,protein,"BUSCO vertebrata_odb10 RefSeq proteins, first records up to 75 M residues",98272,75000139,77943019,18190733
+protein-6-busco-vertebrata,protein,"BUSCO vertebrata_odb10 RefSeq proteins, complete",510639,295915792,311144562,73160188

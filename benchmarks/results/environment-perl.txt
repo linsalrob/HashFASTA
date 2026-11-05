@@ -1,0 +1,9 @@
+impl=perl
+command=perl hashfasta.pl
+commit=5e4b4ac21a46ccd9e055fc0aa24df98dffd79ddc
+job=52209219 node=nid002024 partition=work
+allocation=cpus-per-task=14 mem=24576 MiB
+cpu=AMD EPYC 7763 64-Core Processor
+os=SUSE Linux Enterprise Server 15 SP7 kernel=6.4.0-150700.53.87-default
+storage=node-local overlay
+version=perl v5.26.1

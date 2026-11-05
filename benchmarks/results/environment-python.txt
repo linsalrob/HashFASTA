@@ -1,0 +1,9 @@
+impl=python
+command=python3.11 run_hashfasta.py
+commit=5e4b4ac21a46ccd9e055fc0aa24df98dffd79ddc
+job=52210265 node=nid002816 partition=work
+allocation=cpus-per-task=14 mem=24576 MiB
+cpu=AMD EPYC 7763 64-Core Processor
+os=SUSE Linux Enterprise Server 15 SP7 kernel=6.4.0-150700.53.87-default
+storage=node-local overlay
+version=Python 3.11.17
