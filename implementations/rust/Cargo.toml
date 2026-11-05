@@ -1,6 +1,6 @@
 [package]
 name = "hashfasta"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "HashFASTA v0.1 converter: sequence-derived SHA-256 FASTA IDs, gzip output"
 license-file = "../../LICENSE"

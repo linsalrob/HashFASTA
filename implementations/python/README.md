@@ -8,7 +8,7 @@ Python reference implementation of [HashFASTA](https://github.com/linsalrob/Hash
 
 Two different sequences that share a source ID get different keys. Identical sequences get the same key, and both records are kept. Output is always gzip. See the [specification](https://github.com/linsalrob/HashFASTA/blob/main/spec/HASHFASTA-v0.1.md).
 
-Standard library only. Installing needs Python ≥ 3.9; the code itself also runs on Python 3.6+ straight from a checkout through `run_hashfasta.py`.
+Standard library only. Installing needs Python ≥ 3.10; the code itself also runs on Python 3.6+ straight from a checkout through `run_hashfasta.py`.
 
 ## Install
 

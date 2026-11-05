@@ -35,7 +35,7 @@ Memory use is driven mainly by the longest individual sequence, which each imple
 Use whichever implementation is available. Python and Perl need no compiled build.
 
 ```sh
-# Python, installed with pip (Python >= 3.9): command and library
+# Python, installed with pip (Python >= 3.10): command and library
 pip install "git+https://github.com/linsalrob/HashFASTA#subdirectory=implementations/python"
 hashfasta sample.fasta.gz
 
@@ -92,7 +92,7 @@ See the [specification](spec/HASHFASTA-v0.1.md) for the complete normalization a
 
 | Language | Requirements | Build |
 | --- | --- | --- |
-| Python | Python ≥ 3.6 from checkout; ≥ 3.9 for `pip install` | none, or `pip install implementations/python` |
+| Python | Python ≥ 3.6 from checkout; ≥ 3.10 for `pip install` | none, or `pip install implementations/python` |
 | Perl | Perl 5 core modules; `xz` command for xz input | none |
 | Rust | Cargo, C compiler, and dependencies in Cargo manifest | `cargo build --release --manifest-path implementations/rust/Cargo.toml` |
 | C | C99 compiler, zlib, libbz2, liblzma headers | `make -C implementations/c` |
