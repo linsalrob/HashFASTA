@@ -6,9 +6,11 @@ Runs the same checks against every implementation:
     python3 tests/run_conformance.py                 # all implementations
     python3 tests/run_conformance.py python c        # selected ones
     python3 tests/run_conformance.py --cmd ./mytool  # any executable
+    python3 tests/run_conformance.py --threads 4 c   # pass --threads 4 to each
 
-Each implementation is invoked as ``CMD INPUT [-o OUTPUT]``. Output is always
-checked to be gzip (magic bytes, ``gzip -t`` and a full decompression), and the
+Each implementation is invoked as ``CMD INPUT [-o OUTPUT]`` (with
+``--threads N`` appended to CMD when given). Output is always checked to be a
+single gzip member (magic bytes, ``gzip -t`` and a full decompression), and the
 decompressed bytes are compared exactly with the expected fixture. Build the
 compiled implementations first (``make build`` or see README.md).
 """
@@ -23,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA = os.path.join(ROOT, "tests", "data")
@@ -77,6 +80,32 @@ def hash_record(header, seq):
     return b">sha256_" + hashlib.sha256(seq).hexdigest().encode() + b" [" + header + b"]\n" + seq + b"\n"
 
 
+def wrapped_record(header, seq):
+    """HashFASTA text for an uppercase sequence, wrapped at 80 columns."""
+    lines = b"".join(seq[i:i + 80] + b"\n" for i in range(0, len(seq), 80))
+    return b">sha256_" + hashlib.sha256(seq).hexdigest().encode() + b" [" + header + b"]\n" + lines
+
+
+def large_fasta(seed=7):
+    """A few MiB of FASTA, so parallel writers compress many blocks.
+
+    Returns (input bytes, expected decompressed output): one 3 Mbp record in
+    mixed case wrapped at 60, then 3000 short protein records.
+    """
+    import random
+    rng = random.Random(seed)
+    text, expected = bytearray(), bytearray()
+    records = [(b"chr-long mixed case", "ACGTacgtN", 3000000, 60)]
+    records += [(b"prot_%d" % i, "ACDEFGHIKLMNPQRSTVWYacdefghiklmnpqrstvwy", rng.randint(50, 900), 70)
+                for i in range(3000)]
+    for header, alphabet, length, width in records:
+        seq = "".join(rng.choices(alphabet, k=length)).encode()
+        text += b">" + header + b"\n"
+        text += b"".join(seq[i:i + width] + b"\n" for i in range(0, len(seq), width))
+        expected += wrapped_record(header, seq.upper())
+    return bytes(text), bytes(expected)
+
+
 def default_name(name):
     """Spec section 5 default output name (independent of any implementation)."""
     for s in COMPRESSION_SUFFIXES:
@@ -112,9 +141,10 @@ def variants(text, gz_bytes):
 
 
 class Runner(object):
-    def __init__(self, name, cmd):
+    def __init__(self, name, cmd, threads=None):
         self.name = name
-        self.cmd = cmd
+        self.base_cmd = cmd
+        self.cmd = cmd + (["--threads", str(threads)] if threads else [])
         self.passed = 0
         self.failed = []
         self.tmp = tempfile.mkdtemp(prefix="hashfasta-%s-" % name)
@@ -147,6 +177,13 @@ class Runner(object):
         p = self.write("gztest.gz", data)
         t = subprocess.run(["gzip", "-t", p], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         self.check(label + " [gzip -t]", t.returncode == 0, t.stderr.decode(errors="replace"))
+        member = zlib.decompressobj(31)
+        try:
+            member.decompress(data)
+            single = member.eof and not member.unused_data
+        except zlib.error:
+            single = False
+        self.check(label + " [single gzip member]", single)
         try:
             got = gzip.decompress(data)
         except Exception as e:  # noqa: BLE001 - report any reader failure
@@ -209,6 +246,28 @@ class Runner(object):
             src = os.path.join(d, "sample.fasta.gz")
             shutil.copy(gz_in, src)
             self.convert_file("%s default -o" % name, src, expected)
+
+    def large_tests(self):
+        """Inputs of several MiB, written to a file and to stdout."""
+        text, expected = large_fasta()
+        src = self.write("large.fasta.gz", gzip.compress(text, 1))
+        self.convert_file("large input", src, expected, self.path("large.hash.fasta.gz"))
+        r = self.run([src, "-o", "-"])
+        self.check("large input -> stdout [exit 0]", r.returncode == 0,
+                   r.stderr.decode(errors="replace"))
+        self.check_gzip_output("large input -> stdout", r.stdout, expected)
+        os.unlink(src)
+
+    def option_tests(self):
+        src = self.write("opt.fasta", b">n\nACGT\n")
+        for value in ("0", "-1", "x", "1.5"):
+            out = self.path("opt.hash.fasta.gz")
+            r = subprocess.run(self.base_cmd + [src, "-o", out, "--threads", value],
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.check("--threads %s is a usage error [exit 2]" % value, r.returncode == 2,
+                       "exit %d" % r.returncode)
+            self.check("--threads %s writes no output" % value, not os.path.exists(out))
+        os.unlink(src)
 
     def naming_tests(self):
         d = self.path("naming")
@@ -342,6 +401,8 @@ class Runner(object):
         print("== %s: %s" % (self.name, " ".join(self.cmd)))
         try:
             self.fixture_tests()
+            self.large_tests()
+            self.option_tests()
             self.naming_tests()
             self.error_tests()
         finally:
@@ -413,6 +474,11 @@ def cross_check(targets):
 
 
 def main(argv):
+    threads = None
+    if argv[:1] == ["--threads"]:
+        if len(argv) < 2 or not argv[1].isdigit() or int(argv[1]) < 1:
+            raise SystemExit("--threads needs a positive integer")
+        threads, argv = int(argv[1]), argv[2:]
     if argv[:1] == ["--cmd"]:
         targets = [("custom", argv[1:])]
     else:
@@ -429,8 +495,9 @@ def main(argv):
             print("== %s: MISSING (%s not found; build it first)" % (name, exe))
             results[name] = False
             continue
-        results[name] = Runner(name, cmd).run_all()
-    available = [(n, c) for n, c in targets if results[n]]
+        results[name] = Runner(name, cmd, threads).run_all()
+    extra = ["--threads", str(threads)] if threads else []
+    available = [(n, c + extra) for n, c in targets if results[n]]
     if len(available) > 1:
         print()
         results["cross"] = cross_check(available)

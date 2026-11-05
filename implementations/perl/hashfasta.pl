@@ -1,14 +1,15 @@
 #!/usr/bin/env perl
 # HashFASTA v0.1 converter (Perl port of the Python reference).
 #
-# Usage: hashfasta.pl INPUT [-o OUTPUT]   ('-' means stdin / stdout)
+# Usage: hashfasta.pl INPUT [-o OUTPUT] [--threads N]   ('-' means stdin / stdout)
 #
 # Input format is detected from its magic bytes. Core modules handle gzip
 # (IO::Uncompress::Gunzip), bzip2 (IO::Uncompress::Bunzip2) and plain text;
 # all read concatenated members/streams. xz streams through the system
 # `xz -dc` command (xz-utils): CPAN's IO::Uncompress::UnXz rejects valid xz
 # stream padding, so it is not used.
-# Output uses IO::Compress::Gzip and Digest::SHA.
+# Output uses IO::Compress::Gzip and Digest::SHA. This port is single-threaded:
+# --threads N is accepted and validated for a common command line, but ignored.
 
 use strict;
 use warnings;
@@ -25,7 +26,7 @@ my $LINE_WIDTH    = 80;
 my @COMPRESS_SFX  = qw(.gz .bgz .bz2 .xz);
 my @FASTA_SUFFIX  = qw(.fa .fas .fasta .fna .ffn .faa .frn .fsa);
 my $OUTPUT_SUFFIX = '.hash.fasta.gz';
-my $USAGE         = "usage: hashfasta INPUT [-o OUTPUT]   ('-' means stdin/stdout)\n";
+my $USAGE         = "usage: hashfasta INPUT [-o OUTPUT] [--threads N]   ('-' means stdin/stdout)\n";
 
 my $tmp_path;    # removed on error
 
@@ -218,6 +219,12 @@ sub main {
             exit 0;
         } elsif ($arg eq '-o' && @ARGV) {
             $output = shift @ARGV;
+        } elsif ($arg eq '--threads' && @ARGV) {
+            my $n = shift @ARGV;
+            unless ($n =~ /\A[0-9]+\z/ && $n >= 1 && $n <= 256) {
+                print STDERR "$PROG: error: --threads needs an integer from 1 to 256\n", $USAGE;
+                exit 2;
+            }
         } elsif (($arg ne '-' && $arg =~ /^-/) || defined $input) {
             print STDERR $USAGE;
             exit 2;

@@ -1,4 +1,4 @@
-"""``hashfasta INPUT [-o OUTPUT]`` command-line interface."""
+"""``hashfasta INPUT [-o OUTPUT] [--threads N]`` command-line interface."""
 
 import sys
 
@@ -6,13 +6,14 @@ from . import __version__
 from .core import HashFastaError, convert
 
 PROG = "hashfasta"
-USAGE = "usage: %s INPUT [-o OUTPUT]   ('-' means stdin/stdout)\n" % PROG
+USAGE = "usage: %s INPUT [-o OUTPUT] [--threads N]   ('-' means stdin/stdout)\n" % PROG
 
 
 def parse_args(argv):
-    """Return (input, output) or None for a usage error. Exits for -h/--version."""
+    """Return (input, output, threads) or None for a usage error. Exits for -h/--version."""
     input_path = None
     output_path = None
+    threads = 1
     i = 0
     while i < len(argv):
         arg = argv[i]
@@ -28,13 +29,21 @@ def parse_args(argv):
             output_path = argv[i + 1]
             i += 2
             continue
+        if arg == "--threads":
+            value = argv[i + 1] if i + 1 < len(argv) else ""
+            if not (value.isdigit() and 1 <= int(value) <= 256):
+                sys.stderr.write("%s: error: --threads needs an integer from 1 to 256\n" % PROG)
+                return None
+            threads = int(value)
+            i += 2
+            continue
         if (arg != "-" and arg.startswith("-")) or input_path is not None:
             return None
         input_path = arg
         i += 1
     if input_path is None:
         return None
-    return input_path, output_path
+    return input_path, output_path, threads
 
 
 def main(argv=None):

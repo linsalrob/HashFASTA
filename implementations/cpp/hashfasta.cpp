@@ -1,11 +1,12 @@
 // HashFASTA v0.1 converter (C++ port of the Python reference).
 //
-// Usage: hashfasta INPUT [-o OUTPUT]   ('-' means stdin / stdout)
+// Usage: hashfasta INPUT [-o OUTPUT] [--threads N]   ('-' means stdin / stdout)
 //
 // Input format is detected from its magic bytes and decoded as a stream:
 // gzip (zlib inflate), bzip2 (libbz2) or xz (liblzma), each reading
 // concatenated members/streams as one input; anything else is plain text.
-// Output is written with zlib's gzwrite().
+// Output is written with zlib's gzwrite(), or with the parallel writer in
+// pgzip.hpp when --threads N asks for more than one compression thread.
 
 #include <bzlib.h>
 #include <fcntl.h>
@@ -19,11 +20,13 @@
 #include <cstdio>
 #include <cstring>
 #include <iostream>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
+#include "pgzip.hpp"
 #include "sha256.hpp"
 
 namespace hashfasta {
@@ -31,10 +34,11 @@ namespace {
 
 constexpr std::size_t kLineWidth = 80;
 constexpr std::size_t kIoBuffer = 1u << 17;
+constexpr int kLevel = 6;  // gzip compression level
 const char *const kOutputSuffix = ".hash.fasta.gz";
 const char *const kCompressionSuffixes[] = {".gz", ".bgz", ".bz2", ".xz"};
 const char *const kFastaSuffixes[] = {".fa", ".fas", ".fasta", ".fna", ".ffn", ".faa", ".frn", ".fsa"};
-const char *const kUsage = "usage: hashfasta INPUT [-o OUTPUT]   ('-' means stdin/stdout)\n";
+const char *const kUsage = "usage: hashfasta INPUT [-o OUTPUT] [--threads N]   ('-' means stdin/stdout)\n";
 
 struct Error : std::runtime_error {
     using std::runtime_error::runtime_error;
@@ -46,24 +50,32 @@ std::string zlib_message(gzFile f) {
     return err == Z_ERRNO ? std::strerror(errno) : msg;
 }
 
+// Compressed output.
+class Sink {
+public:
+    virtual ~Sink() = default;
+    virtual void write(const void *data, std::size_t len) = 0;
+    virtual void close() = 0;
+};
+
 // RAII wrapper around a zlib gzFile used for output.
-class GzFile {
+class GzFile : public Sink {
 public:
     explicit GzFile(gzFile f) : f_(f) {}
     GzFile(const GzFile &) = delete;
     GzFile &operator=(const GzFile &) = delete;
-    ~GzFile() {
+    ~GzFile() override {
         if (f_) gzclose(f_);
     }
     gzFile get() const { return f_; }
-    void close() {
+    void close() override {
         int rc = gzclose(f_);
         f_ = nullptr;
         if (rc != Z_OK)
             throw Error(std::string("closing output failed (") +
                         (rc == Z_ERRNO ? std::strerror(errno) : zError(rc)) + ")");
     }
-    void write(const void *data, std::size_t len) {
+    void write(const void *data, std::size_t len) override {
         if (len && gzwrite(f_, data, static_cast<unsigned>(len)) != static_cast<int>(len))
             throw Error("write failed: " + zlib_message(f_));
     }
@@ -71,6 +83,40 @@ public:
 private:
     gzFile f_;
 };
+
+// Parallel compression on several threads; closes fd on close() if it owns it.
+class ParallelSink : public Sink {
+public:
+    ParallelSink(int fd, int threads, bool owns_fd) : gz_(fd, kLevel, threads), fd_(fd), owns_fd_(owns_fd) {}
+    ~ParallelSink() override {
+        if (owns_fd_) ::close(fd_);
+    }
+    void write(const void *data, std::size_t len) override { gz_.write(data, len); }
+    void close() override {
+        gz_.finish();
+        if (owns_fd_) {
+            owns_fd_ = false;
+            if (::close(fd_) != 0) throw Error(std::string("closing output failed (") + std::strerror(errno) + ")");
+        }
+    }
+
+private:
+    ParallelGzip gz_;
+    int fd_;
+    bool owns_fd_;
+};
+
+// Output on fd (taken over by the sink): gzwrite, or parallel for threads > 1.
+std::unique_ptr<Sink> open_sink(int fd, int threads, bool owns_fd) {
+    if (threads > 1) return std::make_unique<ParallelSink>(fd, threads, owns_fd);
+    gzFile f = gzdopen(fd, "wb");
+    if (!f) {
+        if (owns_fd) ::close(fd);
+        throw Error(std::string("cannot open output: ") + std::strerror(errno));
+    }
+    gzbuffer(f, kIoBuffer);
+    return std::make_unique<GzFile>(f);
+}
 
 // Streaming decoder over a file descriptor; format chosen from magic bytes.
 class Reader {
@@ -253,7 +299,7 @@ std::string default_output_path(std::string name) {
     return name + kOutputSuffix;
 }
 
-void write_record(GzFile &out, const std::string &header, const std::string &seq, std::size_t header_line) {
+void write_record(Sink &out, const std::string &header, const std::string &seq, std::size_t header_line) {
     if (seq.empty()) throw Error("record at line " + std::to_string(header_line) + " has an empty sequence");
     Sha256 sha;
     sha.update(reinterpret_cast<const unsigned char *>(seq.data()), seq.size());
@@ -277,7 +323,7 @@ std::string hex_byte(unsigned char c) {
 }
 
 // Stream FASTA records from in to out, holding one record in memory.
-void convert(Reader &in, GzFile &out) {
+void convert(Reader &in, Sink &out) {
     enum class State { LineStart, InHeader, InComment, InSeq } st = State::LineStart;
     std::vector<unsigned char> chunk(kIoBuffer);
     std::optional<std::string> header;
@@ -356,7 +402,7 @@ bool same_file(const std::string &a, const std::string &b) {
     return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
 }
 
-void run(const std::string &input, std::optional<std::string> output_opt) {
+void run(const std::string &input, std::optional<std::string> output_opt, int threads) {
     std::string output = output_opt ? *output_opt : input == "-" ? "-" : default_output_path(input);
     if (input != "-" && output != "-" && same_file(input, output))
         throw Error("output path " + output + " would overwrite the input");
@@ -366,11 +412,9 @@ void run(const std::string &input, std::optional<std::string> output_opt) {
     Reader in(fd);
 
     if (output == "-") {
-        GzFile out(gzdopen(STDOUT_FILENO, "wb"));
-        if (!out.get()) throw Error("cannot open stdout");
-        gzbuffer(out.get(), kIoBuffer);
-        convert(in, out);
-        out.close();
+        std::unique_ptr<Sink> out = open_sink(STDOUT_FILENO, threads, false);
+        convert(in, *out);
+        out->close();
         return;
     }
 
@@ -378,14 +422,9 @@ void run(const std::string &input, std::optional<std::string> output_opt) {
     std::string tmp;
     const int tmp_fd = create_temp(output, tmp);
     try {
-        GzFile out(gzdopen(tmp_fd, "wb"));
-        if (!out.get()) {
-            ::close(tmp_fd);
-            throw Error("cannot create " + output + ": " + std::strerror(errno));
-        }
-        gzbuffer(out.get(), kIoBuffer);
-        convert(in, out);
-        out.close();
+        std::unique_ptr<Sink> out = open_sink(tmp_fd, threads, true);
+        convert(in, *out);
+        out->close();
         if (std::rename(tmp.c_str(), output.c_str()) != 0)
             throw Error("cannot write " + output + ": " + std::strerror(errno));
     } catch (...) {
@@ -399,6 +438,7 @@ void run(const std::string &input, std::optional<std::string> output_opt) {
 
 int main(int argc, char **argv) {
     std::optional<std::string> input, output;
+    int threads = 1;
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if (arg == "-h" || arg == "--help") {
@@ -406,6 +446,20 @@ int main(int argc, char **argv) {
             return 0;
         } else if (arg == "-o" && i + 1 < argc) {
             output = argv[++i];
+        } else if (arg == "--threads" && i + 1 < argc) {
+            std::string value = argv[++i];
+            std::size_t used = 0;
+            long n = 0;
+            try {
+                n = std::stol(value, &used);
+            } catch (const std::exception &) {
+                used = 0;
+            }
+            if (used != value.size() || n < 1 || n > 256) {
+                std::cerr << "hashfasta: error: --threads needs an integer from 1 to 256\n" << hashfasta::kUsage;
+                return 2;
+            }
+            threads = static_cast<int>(n);
         } else if ((arg.size() > 1 && arg[0] == '-') || input) {
             std::cerr << hashfasta::kUsage;
             return 2;
@@ -418,7 +472,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     try {
-        hashfasta::run(*input, output);
+        hashfasta::run(*input, output, threads);
     } catch (const std::exception &e) {
         std::cerr << "hashfasta: error: " << e.what() << '\n';
         return 1;

@@ -1,11 +1,12 @@
 /* HashFASTA v0.1 converter (C port of the Python reference).
  *
- * Usage: hashfasta INPUT [-o OUTPUT]   ('-' means stdin / stdout)
+ * Usage: hashfasta INPUT [-o OUTPUT] [--threads N]   ('-' means stdin / stdout)
  *
  * Input format is detected from its magic bytes and decoded as a stream:
  * gzip (zlib inflate), bzip2 (libbz2) or xz (liblzma), each reading
  * concatenated members/streams as one input; anything else is plain text.
- * Output is written with zlib's gzwrite().
+ * Output is written with zlib's gzwrite(), or with the parallel writer in
+ * pgzip.c when --threads N asks for more than one compression thread.
  */
 #include <bzlib.h>
 #include <errno.h>
@@ -19,13 +20,15 @@
 #include <unistd.h>
 #include <zlib.h>
 
+#include "pgzip.h"
 #include "sha256.h"
 
 #define PROG "hashfasta"
 #define LINE_WIDTH 80
 #define IO_BUFFER (1 << 17)
 #define OUTPUT_SUFFIX ".hash.fasta.gz"
-#define USAGE "usage: hashfasta INPUT [-o OUTPUT]   ('-' means stdin/stdout)\n"
+#define LEVEL 6 /* gzip compression level */
+#define USAGE "usage: hashfasta INPUT [-o OUTPUT] [--threads N]   ('-' means stdin/stdout)\n"
 
 static const char *COMPRESSION_SUFFIXES[] = {".gz", ".bgz", ".bz2", ".xz"};
 static const char *FASTA_SUFFIXES[] = {".fa", ".fas", ".fasta", ".fna",
@@ -238,15 +241,24 @@ static int is_space(int c) {
     return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r';
 }
 
-static void gz_put(gzFile out, const void *data, size_t len) {
-    if (len && gzwrite(out, data, (unsigned)len) != (int)len) {
+/* Compressed output sink: zlib's gzFile, or the parallel writer for N > 1 threads. */
+typedef struct {
+    gzFile gz;
+    pgzip *pz;
+} sink;
+
+static void gz_put(sink *out, const void *data, size_t len) {
+    if (!len) return;
+    if (out->pz) {
+        if (pgzip_write(out->pz, data, len) != 0) die("write failed: %s", strerror(errno));
+    } else if (gzwrite(out->gz, data, (unsigned)len) != (int)len) {
         int err;
-        const char *msg = gzerror(out, &err);
+        const char *msg = gzerror(out->gz, &err);
         die("write failed: %s", err == Z_ERRNO ? strerror(errno) : msg);
     }
 }
 
-static void write_record(gzFile out, const buffer *header, const buffer *seq,
+static void write_record(sink *out, const buffer *header, const buffer *seq,
                          size_t header_line) {
     static const char hex[] = "0123456789abcdef";
     unsigned char digest[32];
@@ -286,7 +298,7 @@ static void write_record(gzFile out, const buffer *header, const buffer *seq,
 enum state { LINE_START, IN_HEADER, IN_COMMENT, IN_SEQ };
 
 /* Stream FASTA records from in to out, holding one record in memory. */
-static void convert(reader *in, gzFile out) {
+static void convert(reader *in, sink *out) {
     unsigned char *chunk = malloc(IO_BUFFER);
     buffer header = {0}, seq = {0};
     enum state st = LINE_START;
@@ -407,17 +419,47 @@ static int same_file(const char *a, const char *b) {
     return sa.st_dev == sb.st_dev && sa.st_ino == sb.st_ino;
 }
 
-static void close_output(gzFile out) {
-    int rc = gzclose(out);
-    if (rc != Z_OK) die("closing output failed (%s)", rc == Z_ERRNO ? strerror(errno) : zError(rc));
+static void open_output(sink *out, int fd, int threads) {
+    out->gz = NULL;
+    out->pz = NULL;
+    if (threads > 1) {
+        out->pz = pgzip_open(fd, LEVEL, threads);
+        if (!out->pz) die("cannot start %d compression threads", threads);
+        return;
+    }
+    out->gz = gzdopen(fd, "wb");
+    if (!out->gz) die("cannot open output: %s", strerror(errno));
+    gzbuffer(out->gz, IO_BUFFER);
+}
+
+static void close_output(sink *out, int fd) {
+    if (out->pz) {
+        if (pgzip_close(out->pz) != 0) die("closing output failed (%s)", strerror(errno));
+        if (fd != STDOUT_FILENO && close(fd) != 0)
+            die("closing output failed (%s)", strerror(errno));
+    } else {
+        int rc = gzclose(out->gz);
+        if (rc != Z_OK)
+            die("closing output failed (%s)", rc == Z_ERRNO ? strerror(errno) : zError(rc));
+    }
+}
+
+/* Parse a --threads value: an integer from 1 to 256, else 0. */
+static int parse_threads(const char *s) {
+    char *end;
+    long n;
+    errno = 0;
+    n = strtol(s, &end, 10);
+    if (errno || end == s || *end || n < 1 || n > 256) return 0;
+    return (int)n;
 }
 
 int main(int argc, char **argv) {
     const char *input = NULL, *output = NULL;
     char *default_output = NULL;
     reader in;
-    gzFile out;
-    int i, fd;
+    sink out;
+    int i, fd, out_fd, threads = 1;
 
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
@@ -425,6 +467,12 @@ int main(int argc, char **argv) {
             return 0;
         } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output = argv[++i];
+        } else if (strcmp(argv[i], "--threads") == 0 && i + 1 < argc) {
+            if (!(threads = parse_threads(argv[++i]))) {
+                fputs(PROG ": error: --threads needs an integer from 1 to 256\n", stderr);
+                fputs(USAGE, stderr);
+                return 2;
+            }
         } else if ((argv[i][0] == '-' && argv[i][1] != '\0') || input) {
             fputs(USAGE, stderr);
             return 2;
@@ -444,20 +492,14 @@ int main(int argc, char **argv) {
     if (fd < 0) die("cannot open input %s: %s", input, strerror(errno));
     reader_open(&in, fd);
 
-    if (strcmp(output, "-") == 0) {
-        out = gzdopen(STDOUT_FILENO, "wb");
-        if (!out) die("cannot open stdout");
-    } else {
-        /* Write a temporary sibling, renamed into place only on success. */
-        int tmp_fd = create_temp(output);
-        out = gzdopen(tmp_fd, "wb");
-        if (!out) die("cannot create %s: %s", output, strerror(errno));
-    }
-    gzbuffer(out, IO_BUFFER);
+    /* A named output is written to a temporary sibling, renamed into place
+     * only on success. */
+    out_fd = strcmp(output, "-") == 0 ? STDOUT_FILENO : create_temp(output);
+    open_output(&out, out_fd, threads);
 
-    convert(&in, out);
+    convert(&in, &out);
     reader_close(&in);
-    close_output(out);
+    close_output(&out, out_fd);
     if (tmp_path) {
         if (rename(tmp_path, output) != 0) die("cannot write %s: %s", output, strerror(errno));
         free(tmp_path);
