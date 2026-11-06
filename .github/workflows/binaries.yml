@@ -30,7 +30,7 @@ jobs:
           - os: ubuntu-24.04-arm
             platform: linux-aarch64
             rust_target: aarch64-unknown-linux-musl
-          - os: macos-14
+          - os: macos-15
             platform: macos-arm64
             rust_target: aarch64-apple-darwin
     runs-on: ${{ matrix.os }}
