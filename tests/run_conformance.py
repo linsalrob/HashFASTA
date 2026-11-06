@@ -193,6 +193,15 @@ def boundary_inputs():
     return _boundary_cache
 
 
+def package_version():
+    """__version__ from the Python package: the version every tool must report."""
+    with open(os.path.join(ROOT, "implementations", "python", "src", "hashfasta", "__init__.py")) as fh:
+        for line in fh:
+            if line.startswith("__version__"):
+                return line.split('"')[1]
+    raise SystemExit("no __version__ in the Python package")
+
+
 def default_name(name):
     """Spec section 5 default output name (independent of any implementation)."""
     for s in COMPRESSION_SUFFIXES:
@@ -354,6 +363,12 @@ class Runner(object):
             os.unlink(src)
 
     def option_tests(self):
+        expected = ("hashfasta %s\n" % package_version()).encode()
+        for flag in ("-v", "--version"):
+            r = subprocess.run(self.base_cmd + [flag], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            self.check("%s [exit 0]" % flag, r.returncode == 0, "exit %d" % r.returncode)
+            self.check("%s prints the version" % flag, r.stdout == expected,
+                       "got %r, expected %r" % (r.stdout, expected))
         src = self.write("opt.fasta", b">n\nACGT\n")
         for value in ("0", "-1", "x", "1.5"):
             out = self.path("opt.hash.fasta.gz")

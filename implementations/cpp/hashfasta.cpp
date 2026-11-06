@@ -38,6 +38,7 @@ constexpr int kLevel = 6;  // gzip compression level
 const char *const kOutputSuffix = ".hash.fasta.gz";
 const char *const kCompressionSuffixes[] = {".gz", ".bgz", ".bz2", ".xz"};
 const char *const kFastaSuffixes[] = {".fa", ".fas", ".fasta", ".fna", ".ffn", ".faa", ".frn", ".fsa"};
+const char *const kVersion = "0.3.0";  // keep in step with the Python __version__
 const char *const kUsage = "usage: hashfasta INPUT [-o OUTPUT] [--threads N]   ('-' means stdin/stdout)\n";
 
 struct Error : std::runtime_error {
@@ -443,6 +444,9 @@ int main(int argc, char **argv) {
         std::string arg = argv[i];
         if (arg == "-h" || arg == "--help") {
             std::cout << hashfasta::kUsage;
+            return 0;
+        } else if (arg == "-v" || arg == "--version") {
+            std::cout << "hashfasta " << hashfasta::kVersion << '\n';
             return 0;
         } else if (arg == "-o" && i + 1 < argc) {
             output = argv[++i];

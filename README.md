@@ -47,9 +47,10 @@ Each command writes `sample.hash.fasta.gz` beside the input by default. All impl
 
 ```text
 hashfasta INPUT [-o OUTPUT] [--threads N]
+hashfasta -v | --version
 ```
 
-`--threads N` (default 1, at most 256) compresses the output on N threads, which is where most of the run time goes. The output is still one gzip stream with identical decompressed content; only the compressed bytes differ slightly. C, C++, Rust and Python use the threads; Perl accepts the option but stays single-threaded.
+`-v` / `--version` prints the version (e.g. `hashfasta 0.3.0`). `--threads N` (default 1, at most 256) compresses the output on N threads, which is where most of the run time goes. The output is still one gzip stream with identical decompressed content; only the compressed bytes differ slightly. C, C++, Rust and Python use the threads; Perl accepts the option but stays single-threaded.
 
 | Invocation | Reads | Writes |
 | --- | --- | --- |

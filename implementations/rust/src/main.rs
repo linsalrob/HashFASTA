@@ -316,6 +316,10 @@ fn parse_args(args: &[String]) -> Option<(String, Option<String>, usize)> {
             print!("{USAGE}");
             std::process::exit(0);
         }
+        if arg == "-v" || arg == "--version" {
+            println!("{PROG} {}", env!("CARGO_PKG_VERSION"));
+            std::process::exit(0);
+        }
         if arg == "-o" {
             output = Some(args.get(i + 1)?.clone());
             i += 2;
