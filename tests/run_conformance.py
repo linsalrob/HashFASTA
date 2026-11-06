@@ -22,6 +22,7 @@ import hashlib
 import lzma
 import os
 import shutil
+import struct
 import subprocess
 import sys
 import tempfile
@@ -104,6 +105,92 @@ def large_fasta(seed=7):
         text += b"".join(seq[i:i + width] + b"\n" for i in range(0, len(seq), width))
         expected += wrapped_record(header, seq.upper())
     return bytes(text), bytes(expected)
+
+
+# Sizes of a first member that ends exactly where an implementation's raw
+# input buffer ends: 64 KiB and 128 KiB reads, from the start of the file or
+# after a separate 6-byte read of the magic number.
+BOUNDARY_SIZES = (1 << 16, (1 << 16) + 6, 1 << 17, (1 << 17) + 6)
+_boundary_cache = []
+
+
+def _fasta60(header, seq):
+    return b">" + header + b"\n" + b"".join(seq[i:i + 60] + b"\n" for i in range(0, len(seq), 60))
+
+
+def _longest_under(size, member, pool):
+    """Largest n such that len(member(pool[:n])) <= size (sizes grow with n)."""
+    lo, hi = 0, len(pool)
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if len(member(pool[:mid])) <= size:
+            lo = mid
+        else:
+            hi = mid - 1
+    return lo
+
+
+def _gzip_member(text, size):
+    """One gzip member of exactly `size` bytes, made up with an FNAME field."""
+    co = zlib.compressobj(6, zlib.DEFLATED, -15)
+    body = co.compress(text) + co.flush()
+    trailer = struct.pack("<II", zlib.crc32(text), len(text) & 0xffffffff)
+    pad = size - 11 - len(body) - len(trailer)
+    assert 0 < pad < 4096, pad
+    return b"\x1f\x8b\x08\x08\0\0\0\0\0\x03" + b"n" * pad + b"\0" + body + trailer
+
+
+# Sequence lengths (prefixes of the boundary_inputs pool) whose bzip2 stream
+# has exactly each size, as found by the search in _bzip2_length.
+_BZIP2_LENGTHS = {65536: 222986, 65542: 223149, 131072: 446902, 131078: 446872}
+
+
+def _bzip2_length(size, pool):
+    """Length n such that the bzip2 stream of the first record is size bytes.
+
+    bzip2 has no padding field, and its output size wobbles by ~100 bytes
+    between neighbouring lengths, so try lengths near the boundary until one
+    fits exactly. Known answers skip the search.
+    """
+    import random
+
+    def fits(n):
+        return len(bz2.compress(_fasta60(b"first", pool[:n]))) == size
+    n = _BZIP2_LENGTHS.get(size)
+    if n is not None and fits(n):
+        return n
+    n = _longest_under(size, lambda seq: bz2.compress(_fasta60(b"first", seq)), pool)
+    pick = random.Random(size)
+    while True:
+        m = n + pick.randint(-500, 500)
+        if fits(m):
+            return m
+
+
+def boundary_inputs():
+    """Two-member gzip and bzip2 inputs whose first member ends at a buffer edge.
+
+    Returns [(label, suffix, input bytes, expected output)], computed once.
+    """
+    if _boundary_cache:
+        return _boundary_cache
+    import random
+    rng = random.Random(13)
+    pool = "".join(rng.choices("ACGT", k=1 << 20)).encode()
+    tail_seq = b"ACGTACGTNNACGT"
+    tail = _fasta60(b"second member", tail_seq)
+    for size in BOUNDARY_SIZES:
+        # gzip: the longest record whose member fits, padded to size in the header.
+        n = _longest_under(size - 2, lambda seq: gzip.compress(_fasta60(b"first", seq), 6), pool)
+        text = _fasta60(b"first", pool[:n])
+        data = _gzip_member(text, size)
+        expected = wrapped_record(b"first", pool[:n]) + wrapped_record(b"second member", tail_seq)
+        _boundary_cache.append(("gz %d" % size, ".fasta.gz", data + gzip.compress(tail), expected))
+        n = _bzip2_length(size, pool)
+        data = bz2.compress(_fasta60(b"first", pool[:n]))
+        expected = wrapped_record(b"first", pool[:n]) + wrapped_record(b"second member", tail_seq)
+        _boundary_cache.append(("bz2 %d" % size, ".fasta.bz2", data + bz2.compress(tail), expected))
+    return _boundary_cache
 
 
 def default_name(name):
@@ -258,6 +345,14 @@ class Runner(object):
         self.check_gzip_output("large input -> stdout", r.stdout, expected)
         os.unlink(src)
 
+    def boundary_tests(self):
+        """Concatenated inputs whose first member ends at a read-buffer edge."""
+        for label, suffix, data, expected in boundary_inputs():
+            src = self.write("boundary" + suffix, data)
+            self.convert_file("member ends at %s bytes" % label, src, expected,
+                              self.path("boundary.hash.fasta.gz"))
+            os.unlink(src)
+
     def option_tests(self):
         src = self.write("opt.fasta", b">n\nACGT\n")
         for value in ("0", "-1", "x", "1.5"):
@@ -402,6 +497,7 @@ class Runner(object):
         try:
             self.fixture_tests()
             self.large_tests()
+            self.boundary_tests()
             self.option_tests()
             self.naming_tests()
             self.error_tests()
