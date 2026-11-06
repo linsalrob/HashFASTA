@@ -22,6 +22,7 @@ use Fcntl qw(O_CREAT O_EXCL O_WRONLY);
 use POSIX ();
 
 my $PROG          = 'hashfasta';
+my $VERSION       = '0.3.0';    # keep in step with the Python __version__
 my $LINE_WIDTH    = 80;
 my @COMPRESS_SFX  = qw(.gz .bgz .bz2 .xz);
 my @FASTA_SUFFIX  = qw(.fa .fas .fasta .fna .ffn .faa .frn .fsa);
@@ -216,6 +217,9 @@ sub main {
         my $arg = shift @ARGV;
         if ($arg eq '-h' || $arg eq '--help') {
             print $USAGE;
+            exit 0;
+        } elsif ($arg eq '-v' || $arg eq '--version') {
+            print "$PROG $VERSION\n";
             exit 0;
         } elsif ($arg eq '-o' && @ARGV) {
             $output = shift @ARGV;

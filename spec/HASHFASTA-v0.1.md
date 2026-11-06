@@ -83,7 +83,7 @@ hashfasta input.fasta[.gz] [-o output.hash.fasta.gz]
 - Output is always gzip-compressed in this draft. To read the resulting FASTA text, use any gzip reader (for example, `gzip -cd sample.hash.fasta.gz`).
 - Errors go to stderr and produce a non-zero exit status (`1` for invalid input or I/O failure, `2` for usage errors). A failed file-to-file conversion must not leave a partial output file. Implementations that write a temporary file and rename it into place must create that file exclusively (for example with `O_CREAT | O_EXCL`), so that an existing file, symlink or hard link at the temporary path is never written through.
 
-Language implementations may provide additional options, but the behavior above is the interoperable baseline. The reference implementations share one optional option, `--threads N` (an integer from 1 to 256, default 1), which may compress the output on up to N threads. It must not change the decompressed output, and the output must remain one gzip stream; an implementation that does not parallelise accepts and ignores it. An invalid value is a usage error.
+Language implementations may provide additional options, but the behavior above is the interoperable baseline. The reference implementations share one optional option, `--threads N` (an integer from 1 to 256, default 1), which may compress the output on up to N threads. It must not change the decompressed output, and the output must remain one gzip stream; an implementation that does not parallelise accepts and ignores it. An invalid value is a usage error. They also share `-v` / `--version`, which prints `hashfasta X.Y.Z` (the reference implementations' release version, not the format version) to stdout and exits 0.
 
 ## 6. Conformance tests
 

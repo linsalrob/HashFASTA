@@ -10,7 +10,7 @@ USAGE = "usage: %s INPUT [-o OUTPUT] [--threads N]   ('-' means stdin/stdout)\n"
 
 
 def parse_args(argv):
-    """Return (input, output, threads) or None for a usage error. Exits for -h/--version."""
+    """Return (input, output, threads) or None for a usage error. Exits for -h/-v."""
     input_path = None
     output_path = None
     threads = 1
@@ -20,7 +20,7 @@ def parse_args(argv):
         if arg in ("-h", "--help"):
             sys.stdout.write(USAGE)
             sys.exit(0)
-        if arg == "--version":
+        if arg in ("-v", "--version"):
             sys.stdout.write("%s %s\n" % (PROG, __version__))
             sys.exit(0)
         if arg == "-o":

@@ -24,6 +24,7 @@
 #include "sha256.h"
 
 #define PROG "hashfasta"
+#define VERSION "0.3.0" /* keep in step with the Python __version__ */
 #define LINE_WIDTH 80
 #define IO_BUFFER (1 << 17)
 #define OUTPUT_SUFFIX ".hash.fasta.gz"
@@ -464,6 +465,9 @@ int main(int argc, char **argv) {
     for (i = 1; i < argc; i++) {
         if (strcmp(argv[i], "-h") == 0 || strcmp(argv[i], "--help") == 0) {
             fputs(USAGE, stdout);
+            return 0;
+        } else if (strcmp(argv[i], "-v") == 0 || strcmp(argv[i], "--version") == 0) {
+            puts(PROG " " VERSION);
             return 0;
         } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output = argv[++i];
